@@ -18,6 +18,7 @@ use crate::{
     commands::{DriverCommand, ScrollUnit, TouchCommandPhase},
     state_handlers::StateOperation,
     time_control::TimeControlAction,
+    window_control::WindowAction,
 };
 
 const CHARACTER_KEYS: [(char, KeyCode); 36] = [
@@ -157,6 +158,8 @@ pub enum DriverStep {
         /// Output path.
         path: String,
     },
+    /// Ask for the primary window to be minimized or restored.
+    Window(WindowAction),
     /// Release everything the driver holds.
     ReleaseAll,
     /// Exit the app.
@@ -358,6 +361,12 @@ pub fn expand_command(command: &DriverCommand) -> Vec<DriverStep> {
         }),
         DriverCommand::Screenshot { path } => {
             then_end_frame(DriverStep::Screenshot { path: path.clone() })
+        }
+        DriverCommand::WindowMinimize {} => {
+            then_end_frame(DriverStep::Window(WindowAction::Minimize))
+        }
+        DriverCommand::WindowRestore {} => {
+            then_end_frame(DriverStep::Window(WindowAction::Restore))
         }
         DriverCommand::ReleaseAll {} => then_end_frame(DriverStep::ReleaseAll),
         DriverCommand::Quit {} => then_end_frame(DriverStep::Quit),
@@ -712,6 +721,24 @@ mod tests {
                     operation: StateOperation::Load,
                     path: "slot.txt".to_owned()
                 },
+                DriverStep::EndFrame
+            ]
+        );
+    }
+
+    #[test]
+    fn window_commands_end_with_a_barrier() {
+        assert_eq!(
+            expand(r#"{"cmd":"window_minimize"}"#),
+            vec![
+                DriverStep::Window(WindowAction::Minimize),
+                DriverStep::EndFrame
+            ]
+        );
+        assert_eq!(
+            expand(r#"{"cmd":"window_restore"}"#),
+            vec![
+                DriverStep::Window(WindowAction::Restore),
                 DriverStep::EndFrame
             ]
         );

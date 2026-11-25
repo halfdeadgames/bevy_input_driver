@@ -19,6 +19,7 @@ use crate::{
     status::DriverStatus,
     steps::{DrawnWaitProgress, DriverQueue, DriverStep},
     time_control::{TimeControlAction, queue_time_action},
+    window_control::queue_window_action,
 };
 
 /// Registers the queue, the status, and the executor system.
@@ -199,6 +200,7 @@ fn apply_step(
         DriverStep::Pan { delta } => injector.pan(*delta),
         DriverStep::DoubleTap => injector.double_tap(),
         DriverStep::Screenshot { path } => request_screenshot(commands, status, path.clone()),
+        DriverStep::Window(action) => queue_window_action(commands, *action),
         DriverStep::ReleaseAll => release_everything_held(injector, status)?,
         DriverStep::Quit => {
             app_exit.write(AppExit::Success);

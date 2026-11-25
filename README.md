@@ -49,6 +49,7 @@ One JSON object per command, tagged by `cmd`. Positions are logical pixels in th
 | `wait_seconds` | `{"cmd":"wait_seconds","seconds":0.5}` (wall-clock time from `std::time::Instant`, so pausing or `time_fixed_step` does not change it) |
 | `wait_until_drawn` | `{"cmd":"wait_until_drawn","timeout_seconds":60,"settle_frames":3}` (waits until the shaders in use have compiled; see below; timeout default 60, above 0 and at most 3600; `settle_frames` default 3, from 1 to 600) |
 | `screenshot` | `{"cmd":"screenshot","path":"shots/start.png"}` |
+| `window_minimize` / `window_restore` | `{"cmd":"window_minimize"}` (see [Minimized windows](#minimized-windows)) |
 | `release_all` | `{"cmd":"release_all"}` |
 | `quit` | `{"cmd":"quit"}` |
 | `set_seed` | `{"cmd":"set_seed","seed":42}` (sets `DriverSeed`) |
@@ -115,6 +116,8 @@ On Windows, Bevy reports a minimized window's size as 0 by 0, and `window_minimi
 - In the demo scene, minimizing alone left the window as a 16 by 16 frame at the top-left of the screen with nothing drawn, and restoring did not bring it back. `window_size` stays `[0, 0]` in that state, so `window_minimized` stays true and a script can spot it. In another game, minimizing and restoring worked, but a `screenshot` taken while minimized broke the window the same way, and every later screenshot was a 1 by 1 image with no error (the driver now refuses that screenshot, as the next point says). The cause of the demo scene's breakage is not known yet.
 - While `window_minimized` is true, the driver refuses a `screenshot`: it captures nothing and records the error `screenshot <path>: window is minimized (0x0), skipped`, and the script goes on. Where the field stays false while minimized (on some platforms other than Windows), the screenshot is still taken.
 - Check `window_minimized` before a `wait_until_drawn` in a script that might run while the window is minimized.
+
+To test this on purpose, `window_minimize` and `window_restore` ask Bevy to minimize or restore the primary window (`Window::set_minimized`), then wait one frame. They only send the request: the operating system applies it a few frames later, or not at all. Follow each one with a `wait_frames` and read `window_minimized` in `drive/status` to see what happened. Without a primary window, each records an error such as `window_minimize: no primary window` and the script goes on.
 
 ## Seeds and repeatable tests
 

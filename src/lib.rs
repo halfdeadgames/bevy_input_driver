@@ -23,6 +23,7 @@ pub mod state_handlers;
 pub mod status;
 pub mod steps;
 pub mod time_control;
+pub mod window_control;
 
 pub use commands::{CommandParseError, DriverCommand};
 pub use plugin::InputDriverPlugin;

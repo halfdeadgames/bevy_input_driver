@@ -228,6 +228,12 @@ pub enum DriverCommand {
         /// Output path.
         path: String,
     },
+    /// Ask Bevy to minimize the primary window. Only requests the change; use `wait_frames` and
+    /// read `window_minimized` in `drive/status` to see it happen.
+    WindowMinimize {},
+    /// Ask Bevy to restore the primary window from minimized. Only requests the change; use
+    /// `wait_frames` and read `window_minimized` in `drive/status` to see it happen.
+    WindowRestore {},
     /// Release every key and button the driver holds.
     ReleaseAll {},
     /// Write `AppExit::Success`.
@@ -549,6 +555,16 @@ mod tests {
             DriverCommand::ReleaseAll {}
         );
         assert_eq!(parse(r#"{"cmd":"quit"}"#), DriverCommand::Quit {});
+        assert_eq!(
+            parse(r#"{"cmd":"window_minimize"}"#),
+            DriverCommand::WindowMinimize {}
+        );
+        assert_eq!(
+            parse(r#"{"cmd":"window_restore"}"#),
+            DriverCommand::WindowRestore {}
+        );
+        assert!(parse_command_text(r#"{"cmd":"window_minimize","extra":1}"#).is_err());
+        assert!(parse_command_text(r#"{"cmd":"window_restore","extra":1}"#).is_err());
     }
 
     #[test]
