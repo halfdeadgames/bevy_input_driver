@@ -65,7 +65,7 @@ Every command is visible to game systems for at least one frame of its own. `key
 
 ## Live use over BRP
 
-BRP methods: `drive/send` (one command object or an array; all are parsed before any is queued), `drive/status`, and `drive/clear` (empties the queue and releases everything the driver holds). `drive/status` reports `frame_count`, `queue_length`, `idle`, `cursor_position`, `held_keys`, `held_buttons`, `held_touches`, `pending_screenshots`, `screenshots_saved`, `errors` (last 50), and `script_loaded`, `seed`, `paused`, `speed`, `fixed_step_ms` (null under real time), `virtual_elapsed_seconds`, `state_operations` (last 50 entries such as `saved saves/slot1.txt`), `render_ready`, `pipelines_pending`, and `render_frame_count` (frames the renderer has drawn, or null without a renderer). The time and render fields are refreshed once per frame, and `speed` reads 0 until the first frame finishes. `render_frame_count` usually runs 1 or 2 behind `frame_count`, because a frame is drawn while the next one runs. If `frame_count` keeps rising and `render_frame_count` stays the same, drawing has stopped (for example, in a minimized window), and `wait_until_drawn` will time out.
+BRP methods: `drive/send` (one command object or an array; all are parsed before any is queued), `drive/status`, and `drive/clear` (empties the queue and releases everything the driver holds). `drive/status` reports `frame_count`, `queue_length`, `idle`, `cursor_position`, `held_keys`, `held_buttons`, `held_touches`, `pending_screenshots`, `screenshots_saved`, `errors` (last 50), and `script_loaded`, `seed`, `paused`, `speed`, `fixed_step_ms` (null under real time), `virtual_elapsed_seconds`, `state_operations` (last 50 entries such as `saved saves/slot1.txt`), `render_ready`, `pipelines_pending`, `render_frame_count` (runs of Bevy's `Render` schedule, or null without a renderer), `window_size` (the primary window's `[width, height]` in physical pixels, or null without a primary window), and `window_minimized`. The time, render, and window fields are refreshed once per frame, and `speed` reads 0 until the first frame finishes. `render_frame_count` usually runs 1 or 2 behind `frame_count`, because a frame is drawn while the next one runs. It counts render runs, not frames shown on screen, so it keeps rising in a minimized window.
 
 The helper `tools/drive.py` needs only Python 3:
 
@@ -103,10 +103,17 @@ The driver watches Bevy's `PipelineCache` in the render world. The game counts a
 
 - On a timeout, an error such as `wait_until_drawn: timed out: 2 of 14 pipelines still compiling` is recorded and the script continues. Other reasons are that no pipelines exist (nothing is being drawn) or that the pipeline count kept changing.
 - A game that keeps making new pipelines (materials or variants that change over time) may never have 3 quiet frames in a row, so the wait runs until the timeout. Pass a lower `settle_frames`, such as `{"cmd":"wait_until_drawn","settle_frames":1}`, to end on the first quiet frame. Fewer frames give slow assets less time to queue their pipelines, so keep the default when the game allows it.
-- A minimized window can stop Bevy from rendering, so the wait then times out.
+- A minimized window does not stop the wait: on Windows it succeeds at once, though nothing is on screen. See [Minimized windows](#minimized-windows).
 - A shader that fails to compile counts as finished, so the wait does not hang; an error names how many failed, and Bevy's log has the details.
 - With no renderer (no `RenderPlugin`), the command records an error and the script continues.
 - It checks the pipelines queued so far. Pipelines only queue once their assets have loaded, so a slow asset that arrives after the 3 steady frames is not waited for. Something spawned later in the game (a new material) is not covered either: run `wait_until_drawn` again after spawning it.
+
+## Minimized windows
+
+On Windows, Bevy reports a minimized window's size as 0 by 0, and `window_minimized` is true exactly when `window_size` is `[0, 0]`. Other platforms may keep the size while minimized, so there the field may stay false. While minimized, `frame_count` and `render_frame_count` keep rising as usual, and `wait_until_drawn` succeeds even though nothing is on screen (tested on Windows 11 with Bevy 0.20.1). Do not minimize a game under test:
+
+- In the demo scene, minimizing alone left the window as a 16 by 16 frame at the top-left of the screen with nothing drawn, and restoring did not bring it back. `window_size` stays `[0, 0]` in that state, so `window_minimized` stays true and a script can spot it. In another game, minimizing and restoring worked, but a `screenshot` taken while minimized broke the window the same way, and every later screenshot was a 1 by 1 image with no error. The cause is not known yet.
+- Check `window_minimized` before a `screenshot` or a `wait_until_drawn` in a script that might run while the window is minimized.
 
 ## Seeds and repeatable tests
 

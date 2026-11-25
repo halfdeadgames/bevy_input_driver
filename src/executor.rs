@@ -6,6 +6,7 @@ use bevy::{
     app::AppExit,
     input::{ButtonState, InputSystems, touch::TouchPhase},
     prelude::*,
+    window::PrimaryWindow,
 };
 
 use crate::{
@@ -27,8 +28,25 @@ impl Plugin for DriverExecutorPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DriverQueue>()
             .init_resource::<DriverStatus>()
-            .add_systems(PreUpdate, execute_driver_steps.before(InputSystems));
+            .add_systems(
+                PreUpdate,
+                (refresh_window_status, execute_driver_steps)
+                    .chain()
+                    .before(InputSystems),
+            );
     }
+}
+
+/// Copies the primary window's physical size into [`DriverStatus`].
+pub fn refresh_window_status(
+    primary_window: Query<&Window, With<PrimaryWindow>>,
+    mut status: ResMut<DriverStatus>,
+) {
+    let physical_size = primary_window
+        .single()
+        .ok()
+        .map(|window| [window.physical_width(), window.physical_height()]);
+    status.refresh_window_size(physical_size);
 }
 
 /// Runs steps until a barrier or wait, so injected input is read by `InputSystems` this frame.

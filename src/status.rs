@@ -66,11 +66,17 @@ pub struct DriverStatus {
     pub render_ready: bool,
     /// Render pipelines still queued or compiling. Refreshed once per frame.
     pub pipelines_pending: usize,
-    /// Frames the renderer has finished drawing, wrapping at `u32::MAX`, or none without a
+    /// Runs of Bevy's `Render` schedule so far, wrapping at `u32::MAX`, or none without a
     /// renderer. Refreshed once per frame. It usually runs 1 or 2 behind `frame_count`, because a
-    /// frame is drawn while the next one runs; if `frame_count` rises and this stays the same,
-    /// drawing has stopped (for example, in a minimized window).
+    /// frame is drawn while the next one runs. It counts render runs, not frames shown on screen,
+    /// so it keeps rising in a minimized window on Windows; read `window_minimized` for that.
     pub render_frame_count: Option<u32>,
+    /// The primary window's size in physical pixels, or none without a primary window.
+    /// Refreshed once per frame.
+    pub window_size: Option<[u32; 2]>,
+    /// True when the primary window's size is 0 by 0, which is how Windows reports a minimized
+    /// window. Other platforms may keep the size while minimized. Refreshed once per frame.
+    pub window_minimized: bool,
 }
 
 /// Logs an error and records it in [`DriverStatus`] from code that only has the world.
@@ -99,6 +105,12 @@ impl DriverStatus {
         self.render_ready = readiness.is_some_and(RenderReadiness::is_drawn);
         self.pipelines_pending = readiness.map_or(0, RenderReadiness::pending_pipelines);
         self.render_frame_count = readiness.map(RenderReadiness::render_frames_published);
+    }
+
+    /// Copies the primary window's physical size, or clears it without a primary window.
+    pub fn refresh_window_size(&mut self, physical_size: Option<[u32; 2]>) {
+        self.window_size = physical_size;
+        self.window_minimized = physical_size == Some([0, 0]);
     }
 
     /// Copies queue-derived fields so a reader sees the queue as it is right now.
@@ -221,6 +233,19 @@ mod tests {
         status.note_touch(TouchPhase::Ended, 1, Vec2::ZERO);
         status.note_touch(TouchPhase::Canceled, 2, Vec2::ZERO);
         assert!(status.held_touches.is_empty());
+    }
+
+    #[test]
+    fn a_zero_sized_window_counts_as_minimized() {
+        let mut status = DriverStatus::default();
+        status.refresh_window_size(Some([0, 0]));
+        assert!(status.window_minimized);
+        status.refresh_window_size(Some([1280, 720]));
+        assert!(!status.window_minimized);
+        assert_eq!(status.window_size, Some([1280, 720]));
+        status.refresh_window_size(None);
+        assert!(!status.window_minimized);
+        assert_eq!(status.window_size, None);
     }
 
     #[test]
