@@ -15,6 +15,7 @@ pub mod executor;
 pub mod injection;
 pub mod plugin;
 pub mod remote;
+pub mod render_readiness;
 pub mod screenshot;
 pub mod script_file;
 pub mod seed;
@@ -25,6 +26,7 @@ pub mod time_control;
 
 pub use commands::{CommandParseError, DriverCommand};
 pub use plugin::InputDriverPlugin;
+pub use render_readiness::RenderReadiness;
 pub use seed::DriverSeed;
 pub use state_handlers::{DriverStateHandlers, InputDriverAppExt};
 pub use status::DriverStatus;

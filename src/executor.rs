@@ -11,11 +11,12 @@ use bevy::{
 use crate::{
     injection::{InjectionError, InputInjector},
     plugin::DriverSettings,
+    render_readiness::RenderReadiness,
     screenshot::request_screenshot,
     seed::queue_set_seed,
     state_handlers::queue_state_operation,
     status::DriverStatus,
-    steps::{DriverQueue, DriverStep},
+    steps::{DrawnWaitProgress, DriverQueue, DriverStep},
     time_control::{TimeControlAction, queue_time_action},
 };
 
@@ -35,6 +36,7 @@ pub fn execute_driver_steps(
     mut queue: ResMut<DriverQueue>,
     mut status: ResMut<DriverStatus>,
     settings: Res<DriverSettings>,
+    readiness: Option<Res<RenderReadiness>>,
     mut injector: InputInjector,
     mut commands: Commands,
     mut app_exit: MessageWriter<AppExit>,
@@ -42,7 +44,24 @@ pub fn execute_driver_steps(
     status.frame_count += 1;
     // Wall-clock time, because `time_fixed_step` makes `Time<Real>` advance by a fixed amount.
     let now = Instant::now();
-    if !queue.is_still_waiting(now) {
+    let readiness = readiness.as_deref();
+    // Read before the other counters, which are then at least as new as this frame.
+    let render_frame = readiness.map_or(0, RenderReadiness::render_frames_published);
+    status.refresh_render_readiness(readiness);
+    let waiting_until_drawn = match queue.poll_drawn_wait(now, render_frame, status.render_ready) {
+        DrawnWaitProgress::StillWaiting => true,
+        DrawnWaitProgress::Drawn => {
+            report_failed_pipelines(readiness, &mut status);
+            false
+        }
+        DrawnWaitProgress::TimedOut => {
+            let message = drawn_timeout_message(readiness);
+            status.record_error(message);
+            false
+        }
+        DrawnWaitProgress::NotWaiting => false,
+    };
+    if !waiting_until_drawn && !queue.is_still_waiting(now) {
         while let Some(step) = queue.pop_next_step() {
             match step {
                 DriverStep::EndFrame => break,
@@ -64,6 +83,15 @@ pub fn execute_driver_steps(
                         break;
                     }
                 }
+                DriverStep::WaitUntilDrawn { timeout_seconds } => match readiness {
+                    None => status.record_error(
+                        "wait_until_drawn: the app has no renderer, so nothing is drawn",
+                    ),
+                    Some(_) => {
+                        queue.begin_drawn_wait(now, timeout_seconds, render_frame);
+                        break;
+                    }
+                },
                 input_step => {
                     if let Err(problem) = apply_step(
                         &input_step,
@@ -80,6 +108,28 @@ pub fn execute_driver_steps(
         }
     }
     status.synchronize_with_queue(&queue);
+}
+
+fn drawn_timeout_message(readiness: Option<&RenderReadiness>) -> String {
+    let pending = readiness.map_or(0, RenderReadiness::pending_pipelines);
+    let total = readiness.map_or(0, RenderReadiness::total_pipelines);
+    let reason = if total == 0 {
+        "no render pipelines exist yet (is a camera drawing anything?)".to_owned()
+    } else if pending > 0 {
+        format!("{pending} of {total} pipelines still compiling")
+    } else {
+        format!("the pipeline count ({total}) kept changing")
+    };
+    format!("wait_until_drawn: timed out: {reason}")
+}
+
+fn report_failed_pipelines(readiness: Option<&RenderReadiness>, status: &mut DriverStatus) {
+    let failed = readiness.map_or(0, RenderReadiness::failed_pipelines);
+    if failed > 0 {
+        status.record_error(format!(
+            "wait_until_drawn: {failed} pipelines failed to compile; the log has the shader errors"
+        ));
+    }
 }
 
 fn apply_step(
@@ -137,6 +187,7 @@ fn apply_step(
         DriverStep::EndFrame
         | DriverStep::WaitFrames(_)
         | DriverStep::WaitSeconds(_)
+        | DriverStep::WaitUntilDrawn { .. }
         | DriverStep::BeginSteppedFrames
         | DriverStep::EndSteppedFrames => {}
     }

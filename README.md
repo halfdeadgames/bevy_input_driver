@@ -47,6 +47,7 @@ One JSON object per command, tagged by `cmd`. Positions are logical pixels in th
 | `double_tap` | `{"cmd":"double_tap"}` |
 | `wait_frames` | `{"cmd":"wait_frames","frames":30}` |
 | `wait_seconds` | `{"cmd":"wait_seconds","seconds":0.5}` (wall-clock time from `std::time::Instant`, so pausing or `time_fixed_step` does not change it) |
+| `wait_until_drawn` | `{"cmd":"wait_until_drawn","timeout_seconds":60}` (waits until the shaders in use have compiled; see below; timeout default 60, above 0 and at most 3600) |
 | `screenshot` | `{"cmd":"screenshot","path":"shots/start.png"}` |
 | `release_all` | `{"cmd":"release_all"}` |
 | `quit` | `{"cmd":"quit"}` |
@@ -64,7 +65,7 @@ Every command is visible to game systems for at least one frame of its own. `key
 
 ## Live use over BRP
 
-BRP methods: `drive/send` (one command object or an array; all are parsed before any is queued), `drive/status`, and `drive/clear` (empties the queue and releases everything the driver holds). `drive/status` reports `frame_count`, `queue_length`, `idle`, `cursor_position`, `held_keys`, `held_buttons`, `held_touches`, `pending_screenshots`, `screenshots_saved`, `errors` (last 50), and `script_loaded`, `seed`, `paused`, `speed`, `fixed_step_ms` (null under real time), `virtual_elapsed_seconds`, and `state_operations` (last 50 entries such as `saved saves/slot1.txt`). The time fields are refreshed once per frame, and `speed` reads 0 until the first frame finishes.
+BRP methods: `drive/send` (one command object or an array; all are parsed before any is queued), `drive/status`, and `drive/clear` (empties the queue and releases everything the driver holds). `drive/status` reports `frame_count`, `queue_length`, `idle`, `cursor_position`, `held_keys`, `held_buttons`, `held_touches`, `pending_screenshots`, `screenshots_saved`, `errors` (last 50), and `script_loaded`, `seed`, `paused`, `speed`, `fixed_step_ms` (null under real time), `virtual_elapsed_seconds`, `state_operations` (last 50 entries such as `saved saves/slot1.txt`), `render_ready`, and `pipelines_pending`. The time fields are refreshed once per frame, and `speed` reads 0 until the first frame finishes.
 
 The helper `tools/drive.py` needs only Python 3:
 
@@ -88,6 +89,23 @@ cargo run -- --input-script tests/smoke.jsonl
 ```
 
 `--input-script` overrides `InputDriverPlugin::script_path`.
+
+## Waiting for the first drawn frame
+
+Bevy compiles shaders on background threads and skips drawing anything whose render pipeline is not ready, so the first frames of a run can be blank. Start a script with `wait_until_drawn` instead of a fixed `wait_frames`:
+
+```text
+{"cmd":"wait_until_drawn"}
+{"cmd":"screenshot","path":"shots/start.png"}
+```
+
+The driver watches Bevy's `PipelineCache` in the render world. The game counts as drawn once 3 render frames in a row had at least one pipeline, none queued or compiling, and no new ones. Only render frames after the command starts count (at least 4, because the render world runs a frame behind), so a scene loaded or spawned just before the command is waited for too. The command then waits one more frame so that frame has been presented. `drive/status` shows the same check as `render_ready`, with `pipelines_pending` counting the pipelines still compiling.
+
+- On a timeout, an error such as `wait_until_drawn: timed out: 2 of 14 pipelines still compiling` is recorded and the script continues. Other reasons are that no pipelines exist (nothing is being drawn) or that the pipeline count kept changing.
+- A minimized window can stop Bevy from rendering, so the wait then times out.
+- A shader that fails to compile counts as finished, so the wait does not hang; an error names how many failed, and Bevy's log has the details.
+- With no renderer (no `RenderPlugin`), the command records an error and the script continues.
+- It checks the pipelines queued so far. Pipelines only queue once their assets have loaded, so a slow asset that arrives after the 3 steady frames is not waited for. Something spawned later in the game (a new material) is not covered either: run `wait_until_drawn` again after spawning it.
 
 ## Seeds and repeatable tests
 

@@ -2,7 +2,7 @@
 //   cargo run --example driver_demo -- --input-script scripts/demo_smoke.jsonl --seed 42
 // Expected: 03-loaded.png matches the state saved after the first drag and click
 // (green button, square at left 600, top 330), and the game quits by itself.
-{"cmd":"wait_frames","frames":5}
+{"cmd":"wait_until_drawn"}
 {"cmd":"screenshot","path":"target/driver-smoke/01-start.png"}
 {"cmd":"drag","from":[450,300],"to":[650,380],"frames":12}
 {"cmd":"click","x":140,"y":80}

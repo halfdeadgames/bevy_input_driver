@@ -7,6 +7,7 @@ use bevy::{prelude::*, remote::http::DEFAULT_PORT};
 use crate::{
     executor::DriverExecutorPlugin,
     remote::DriverRemotePlugin,
+    render_readiness::DriverRenderReadinessPlugin,
     script_file::{load_script_file, log_driver_startup},
     seed::DriverSeedPlugin,
     state_handlers::DriverStateHandlersPlugin,
@@ -76,6 +77,7 @@ impl Plugin for InputDriverPlugin {
             DriverSeedPlugin { seed: self.seed },
             DriverTimeControlPlugin,
             DriverStateHandlersPlugin,
+            DriverRenderReadinessPlugin,
         ))
         .add_systems(Startup, (load_script_file, log_driver_startup).chain());
 

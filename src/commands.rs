@@ -13,6 +13,10 @@ const DEFAULT_TAP_HOLD_FRAMES: u32 = 1;
 const DEFAULT_DRAG_FRAMES: u32 = 10;
 /// Largest frame count one command may use.
 pub const MAX_COMMAND_FRAMES: u32 = 100_000;
+/// Seconds `wait_until_drawn` waits when the command gives no `timeout_seconds`.
+pub const DEFAULT_DRAWN_TIMEOUT_SECONDS: f32 = 60.0;
+/// Largest `timeout_seconds` a `wait_until_drawn` command may use.
+pub const MAX_DRAWN_TIMEOUT_SECONDS: f32 = 3600.0;
 
 fn default_hold_frames() -> u32 {
     DEFAULT_TAP_HOLD_FRAMES
@@ -20,6 +24,10 @@ fn default_hold_frames() -> u32 {
 
 fn default_drag_frames() -> u32 {
     DEFAULT_DRAG_FRAMES
+}
+
+fn default_drawn_timeout_seconds() -> f32 {
+    DEFAULT_DRAWN_TIMEOUT_SECONDS
 }
 
 fn default_mouse_button() -> MouseButton {
@@ -195,6 +203,13 @@ pub enum DriverCommand {
         /// Seconds to wait.
         seconds: f32,
     },
+    /// Wait until the render pipelines in use have compiled and a frame using them was drawn,
+    /// or until `timeout_seconds` of wall-clock time have passed.
+    WaitUntilDrawn {
+        /// Wall-clock seconds before giving up and recording an error. Above 0 and at most 3600.
+        #[serde(default = "default_drawn_timeout_seconds")]
+        timeout_seconds: f32,
+    },
     /// Capture the primary window to a PNG file, relative to the working directory.
     Screenshot {
         /// Output path.
@@ -284,6 +299,11 @@ impl DriverCommand {
             }
             Self::WaitSeconds { seconds } if !seconds.is_finite() || *seconds < 0.0 => {
                 Some("wait_seconds seconds must be a finite number of at least 0")
+            }
+            Self::WaitUntilDrawn { timeout_seconds }
+                if !(*timeout_seconds > 0.0 && *timeout_seconds <= MAX_DRAWN_TIMEOUT_SECONDS) =>
+            {
+                Some("wait_until_drawn timeout_seconds must be above 0 and at most 3600")
             }
             Self::TimeSpeed { factor } if !factor.is_finite() || *factor <= 0.0 => {
                 Some("time_speed factor must be a finite number above 0")
@@ -487,6 +507,18 @@ mod tests {
             DriverCommand::WaitSeconds { seconds: 0.25 }
         );
         assert_eq!(
+            parse(r#"{"cmd":"wait_until_drawn"}"#),
+            DriverCommand::WaitUntilDrawn {
+                timeout_seconds: DEFAULT_DRAWN_TIMEOUT_SECONDS
+            }
+        );
+        assert_eq!(
+            parse(r#"{"cmd":"wait_until_drawn","timeout_seconds":5}"#),
+            DriverCommand::WaitUntilDrawn {
+                timeout_seconds: 5.0
+            }
+        );
+        assert_eq!(
             parse(r#"{"cmd":"screenshot","path":"shots/a.png"}"#),
             DriverCommand::Screenshot {
                 path: "shots/a.png".to_owned()
@@ -575,6 +607,10 @@ mod tests {
         );
         assert!(parse_command_text(r#"{"cmd":"click","x":1}"#).is_err());
         assert!(parse_command_text(r#"{"cmd":"wait_seconds","seconds":-1}"#).is_err());
+        for timeout in ["0", "-1", "3601"] {
+            let text = format!(r#"{{"cmd":"wait_until_drawn","timeout_seconds":{timeout}}}"#);
+            assert!(parse_command_text(&text).is_err(), "{text}");
+        }
     }
 
     #[test]

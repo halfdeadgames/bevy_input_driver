@@ -8,7 +8,7 @@ use bevy::{
 };
 use serde::Serialize;
 
-use crate::steps::DriverQueue;
+use crate::{render_readiness::RenderReadiness, steps::DriverQueue};
 
 const MAX_RECORDED_ERRORS: usize = 50;
 const MAX_RECORDED_STATE_OPERATIONS: usize = 50;
@@ -60,6 +60,12 @@ pub struct DriverStatus {
     pub virtual_elapsed_seconds: f64,
     /// The most recent 50 finished `save_state` and `load_state` operations.
     pub state_operations: Vec<String>,
+    /// True once the render pipelines in use have compiled and stayed steady for a few frames,
+    /// the condition `wait_until_drawn` waits for. Refreshed once per frame; always false
+    /// without a renderer.
+    pub render_ready: bool,
+    /// Render pipelines still queued or compiling. Refreshed once per frame.
+    pub pipelines_pending: usize,
 }
 
 /// Logs an error and records it in [`DriverStatus`] from code that only has the world.
@@ -83,6 +89,12 @@ impl DriverStatus {
 }
 
 impl DriverStatus {
+    /// Copies the latest pipeline compilation progress, or clears it without a renderer.
+    pub fn refresh_render_readiness(&mut self, readiness: Option<&RenderReadiness>) {
+        self.render_ready = readiness.is_some_and(RenderReadiness::is_drawn);
+        self.pipelines_pending = readiness.map_or(0, RenderReadiness::pending_pipelines);
+    }
+
     /// Copies queue-derived fields so a reader sees the queue as it is right now.
     pub fn synchronize_with_queue(&mut self, queue: &DriverQueue) {
         self.queue_length = queue.step_count();
