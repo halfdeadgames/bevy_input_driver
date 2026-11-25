@@ -103,12 +103,15 @@ impl PipelineSnapshot {
 
 /// Shares one [`RenderReadiness`] between the main world and the render world.
 ///
-/// Add it after `RenderPlugin` (part of `DefaultPlugins`); without a render sub-app it does
-/// nothing.
+/// Without a render sub-app it does nothing.
 pub struct DriverRenderReadinessPlugin;
 
 impl Plugin for DriverRenderReadinessPlugin {
-    fn build(&self, app: &mut App) {
+    fn build(&self, _app: &mut App) {}
+
+    // `RenderPlugin` creates the render sub-app in its own `build`, so looking for it in `finish`,
+    // after every plugin is built, works whichever order the game added the plugins in.
+    fn finish(&self, app: &mut App) {
         let readiness = RenderReadiness::default();
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
@@ -193,6 +196,28 @@ mod tests {
         readiness.publish(snapshot(6, 0), 5);
         assert_eq!(readiness.render_frames_published(), 2);
         assert_eq!(readiness.total_pipelines(), 6);
+    }
+
+    #[test]
+    fn finds_a_render_sub_app_added_after_the_plugin() {
+        let mut app = App::new();
+        app.add_plugins(DriverRenderReadinessPlugin);
+        app.insert_sub_app(RenderApp, SubApp::new());
+        app.finish();
+        assert!(app.world().contains_resource::<RenderReadiness>());
+        let render_world = app
+            .get_sub_app(RenderApp)
+            .expect("render sub-app was inserted")
+            .world();
+        assert!(render_world.contains_resource::<RenderReadiness>());
+    }
+
+    #[test]
+    fn without_a_render_sub_app_nothing_is_inserted() {
+        let mut app = App::new();
+        app.add_plugins(DriverRenderReadinessPlugin);
+        app.finish();
+        assert!(!app.world().contains_resource::<RenderReadiness>());
     }
 
     #[test]
