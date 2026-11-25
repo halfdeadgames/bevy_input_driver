@@ -48,7 +48,8 @@ pub fn execute_driver_steps(
     // Read before the other counters, which are then at least as new as this frame.
     let render_frame = readiness.map_or(0, RenderReadiness::render_frames_published);
     status.refresh_render_readiness(readiness);
-    let waiting_until_drawn = match queue.poll_drawn_wait(now, render_frame, status.render_ready) {
+    let quiet_render_frames = readiness.map_or(0, RenderReadiness::quiet_render_frames);
+    let waiting_until_drawn = match queue.poll_drawn_wait(now, render_frame, quiet_render_frames) {
         DrawnWaitProgress::StillWaiting => true,
         DrawnWaitProgress::Drawn => {
             report_failed_pipelines(readiness, &mut status);
@@ -83,12 +84,15 @@ pub fn execute_driver_steps(
                         break;
                     }
                 }
-                DriverStep::WaitUntilDrawn { timeout_seconds } => match readiness {
+                DriverStep::WaitUntilDrawn {
+                    timeout_seconds,
+                    settle_frames,
+                } => match readiness {
                     None => status.record_error(
                         "wait_until_drawn: the app has no renderer, so nothing is drawn",
                     ),
                     Some(_) => {
-                        queue.begin_drawn_wait(now, timeout_seconds, render_frame);
+                        queue.begin_drawn_wait(now, timeout_seconds, settle_frames, render_frame);
                         break;
                     }
                 },
@@ -118,7 +122,9 @@ fn drawn_timeout_message(readiness: Option<&RenderReadiness>) -> String {
     } else if pending > 0 {
         format!("{pending} of {total} pipelines still compiling")
     } else {
-        format!("the pipeline count ({total}) kept changing")
+        format!(
+            "the pipeline count ({total}) kept changing; a game that keeps making new              pipelines can pass a lower settle_frames"
+        )
     };
     format!("wait_until_drawn: timed out: {reason}")
 }

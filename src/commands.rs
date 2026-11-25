@@ -6,6 +6,8 @@ use bevy::input::{keyboard::KeyCode, mouse::MouseButton};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::render_readiness::SETTLED_RENDER_FRAMES;
+
 /// A position in logical pixels in the primary window, origin top left.
 pub type LogicalPoint = [f32; 2];
 
@@ -17,6 +19,8 @@ pub const MAX_COMMAND_FRAMES: u32 = 100_000;
 pub const DEFAULT_DRAWN_TIMEOUT_SECONDS: f32 = 60.0;
 /// Largest `timeout_seconds` a `wait_until_drawn` command may use.
 pub const MAX_DRAWN_TIMEOUT_SECONDS: f32 = 3600.0;
+/// Largest `settle_frames` a `wait_until_drawn` command may use.
+pub const MAX_DRAWN_SETTLE_FRAMES: u32 = 600;
 
 fn default_hold_frames() -> u32 {
     DEFAULT_TAP_HOLD_FRAMES
@@ -28,6 +32,10 @@ fn default_drag_frames() -> u32 {
 
 fn default_drawn_timeout_seconds() -> f32 {
     DEFAULT_DRAWN_TIMEOUT_SECONDS
+}
+
+fn default_drawn_settle_frames() -> u32 {
+    SETTLED_RENDER_FRAMES
 }
 
 fn default_mouse_button() -> MouseButton {
@@ -209,6 +217,11 @@ pub enum DriverCommand {
         /// Wall-clock seconds before giving up and recording an error. Above 0 and at most 3600.
         #[serde(default = "default_drawn_timeout_seconds")]
         timeout_seconds: f32,
+        /// Render frames in a row with nothing compiling that count as drawn. From 1 to 600;
+        /// default 3. A game that keeps making new pipelines may never have 3 such frames in a
+        /// row, so a script for it can ask for fewer.
+        #[serde(default = "default_drawn_settle_frames")]
+        settle_frames: u32,
     },
     /// Capture the primary window to a PNG file, relative to the working directory.
     Screenshot {
@@ -300,10 +313,15 @@ impl DriverCommand {
             Self::WaitSeconds { seconds } if !seconds.is_finite() || *seconds < 0.0 => {
                 Some("wait_seconds seconds must be a finite number of at least 0")
             }
-            Self::WaitUntilDrawn { timeout_seconds }
-                if !(*timeout_seconds > 0.0 && *timeout_seconds <= MAX_DRAWN_TIMEOUT_SECONDS) =>
-            {
+            Self::WaitUntilDrawn {
+                timeout_seconds, ..
+            } if !(*timeout_seconds > 0.0 && *timeout_seconds <= MAX_DRAWN_TIMEOUT_SECONDS) => {
                 Some("wait_until_drawn timeout_seconds must be above 0 and at most 3600")
+            }
+            Self::WaitUntilDrawn { settle_frames, .. }
+                if !(1..=MAX_DRAWN_SETTLE_FRAMES).contains(settle_frames) =>
+            {
+                Some("wait_until_drawn settle_frames must be from 1 to 600")
             }
             Self::TimeSpeed { factor } if !factor.is_finite() || *factor <= 0.0 => {
                 Some("time_speed factor must be a finite number above 0")
@@ -509,13 +527,15 @@ mod tests {
         assert_eq!(
             parse(r#"{"cmd":"wait_until_drawn"}"#),
             DriverCommand::WaitUntilDrawn {
-                timeout_seconds: DEFAULT_DRAWN_TIMEOUT_SECONDS
+                timeout_seconds: DEFAULT_DRAWN_TIMEOUT_SECONDS,
+                settle_frames: SETTLED_RENDER_FRAMES,
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"wait_until_drawn","timeout_seconds":5}"#),
+            parse(r#"{"cmd":"wait_until_drawn","timeout_seconds":5,"settle_frames":1}"#),
             DriverCommand::WaitUntilDrawn {
-                timeout_seconds: 5.0
+                timeout_seconds: 5.0,
+                settle_frames: 1,
             }
         );
         assert_eq!(
@@ -609,6 +629,10 @@ mod tests {
         assert!(parse_command_text(r#"{"cmd":"wait_seconds","seconds":-1}"#).is_err());
         for timeout in ["0", "-1", "3601"] {
             let text = format!(r#"{{"cmd":"wait_until_drawn","timeout_seconds":{timeout}}}"#);
+            assert!(parse_command_text(&text).is_err(), "{text}");
+        }
+        for settle_frames in ["0", "601"] {
+            let text = format!(r#"{{"cmd":"wait_until_drawn","settle_frames":{settle_frames}}}"#);
             assert!(parse_command_text(&text).is_err(), "{text}");
         }
     }

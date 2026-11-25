@@ -14,7 +14,8 @@ use bevy::{
 };
 
 /// Render frames in a row with nothing compiling and no new pipelines before the game counts as
-/// drawn. Pipelines only queue once their assets load, so one quiet frame is not enough.
+/// drawn, unless a `wait_until_drawn` command asks for another number with `settle_frames`.
+/// Pipelines only queue once their assets load, so one quiet frame is not enough by default.
 pub const SETTLED_RENDER_FRAMES: u32 = 3;
 
 #[derive(Debug, Default)]
@@ -67,7 +68,14 @@ impl RenderReadiness {
     /// none pending, and no new ones.
     #[must_use]
     pub fn is_drawn(&self) -> bool {
-        self.0.settled_frames.load(COUNTER_ORDERING) >= SETTLED_RENDER_FRAMES
+        self.quiet_render_frames() >= SETTLED_RENDER_FRAMES
+    }
+
+    /// Render frames in a row, up to the latest one, that had at least one pipeline, none
+    /// pending, and no new ones. Saturates at `u32::MAX`.
+    #[must_use]
+    pub fn quiet_render_frames(&self) -> u32 {
+        self.0.settled_frames.load(COUNTER_ORDERING)
     }
 
     fn publish(&self, snapshot: PipelineSnapshot, previous_total: usize) {
@@ -173,6 +181,7 @@ mod tests {
         assert!(!readiness.is_drawn());
         readiness.publish(snapshot(4, 0), 4);
         assert!(readiness.is_drawn());
+        assert_eq!(readiness.quiet_render_frames(), SETTLED_RENDER_FRAMES);
     }
 
     #[test]

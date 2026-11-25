@@ -47,7 +47,7 @@ One JSON object per command, tagged by `cmd`. Positions are logical pixels in th
 | `double_tap` | `{"cmd":"double_tap"}` |
 | `wait_frames` | `{"cmd":"wait_frames","frames":30}` |
 | `wait_seconds` | `{"cmd":"wait_seconds","seconds":0.5}` (wall-clock time from `std::time::Instant`, so pausing or `time_fixed_step` does not change it) |
-| `wait_until_drawn` | `{"cmd":"wait_until_drawn","timeout_seconds":60}` (waits until the shaders in use have compiled; see below; timeout default 60, above 0 and at most 3600) |
+| `wait_until_drawn` | `{"cmd":"wait_until_drawn","timeout_seconds":60,"settle_frames":3}` (waits until the shaders in use have compiled; see below; timeout default 60, above 0 and at most 3600; `settle_frames` default 3, from 1 to 600) |
 | `screenshot` | `{"cmd":"screenshot","path":"shots/start.png"}` |
 | `release_all` | `{"cmd":"release_all"}` |
 | `quit` | `{"cmd":"quit"}` |
@@ -99,9 +99,10 @@ Bevy compiles shaders on background threads and skips drawing anything whose ren
 {"cmd":"screenshot","path":"shots/start.png"}
 ```
 
-The driver watches Bevy's `PipelineCache` in the render world. The game counts as drawn once 3 render frames in a row had at least one pipeline, none queued or compiling, and no new ones. Only render frames after the command starts count (at least 4, because the render world runs a frame behind), so a scene loaded or spawned just before the command is waited for too. The command then waits one more frame so that frame has been presented. `drive/status` shows the same check as `render_ready`, with `pipelines_pending` counting the pipelines still compiling.
+The driver watches Bevy's `PipelineCache` in the render world. The game counts as drawn once 3 render frames in a row (or `settle_frames`, if the command gives it) had at least one pipeline, none queued or compiling, and no new ones. Only render frames after the command starts count (at least one more than that number, because the render world runs a frame behind), so a scene loaded or spawned just before the command is waited for too. The command then waits one more frame so that frame has been presented. `drive/status` shows the same check, always with 3 frames, as `render_ready`, with `pipelines_pending` counting the pipelines still compiling.
 
 - On a timeout, an error such as `wait_until_drawn: timed out: 2 of 14 pipelines still compiling` is recorded and the script continues. Other reasons are that no pipelines exist (nothing is being drawn) or that the pipeline count kept changing.
+- A game that keeps making new pipelines (materials or variants that change over time) may never have 3 quiet frames in a row, so the wait runs until the timeout. Pass a lower `settle_frames`, such as `{"cmd":"wait_until_drawn","settle_frames":1}`, to end on the first quiet frame. Fewer frames give slow assets less time to queue their pipelines, so keep the default when the game allows it.
 - A minimized window can stop Bevy from rendering, so the wait then times out.
 - A shader that fails to compile counts as finished, so the wait does not hang; an error names how many failed, and Bevy's log has the details.
 - With no renderer (no `RenderPlugin`), the command records an error and the script continues.

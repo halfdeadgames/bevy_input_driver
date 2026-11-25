@@ -16,7 +16,6 @@ use bevy::{
 
 use crate::{
     commands::{DriverCommand, ScrollUnit, TouchCommandPhase},
-    render_readiness::SETTLED_RENDER_FRAMES,
     state_handlers::StateOperation,
     time_control::TimeControlAction,
 };
@@ -184,6 +183,8 @@ pub enum DriverStep {
     WaitUntilDrawn {
         /// Wall-clock seconds before giving up.
         timeout_seconds: f32,
+        /// Render frames in a row with nothing compiling that count as drawn.
+        settle_frames: u32,
     },
     /// Unpause game time for a `step_frames` command and remember that it is in flight.
     BeginSteppedFrames,
@@ -348,11 +349,13 @@ pub fn expand_command(command: &DriverCommand) -> Vec<DriverStep> {
         DriverCommand::WaitSeconds { seconds } => vec![DriverStep::WaitSeconds(*seconds)],
         // The barrier gives the game one more frame, so the first frame drawn with every
         // pipeline has been presented before the next command runs.
-        DriverCommand::WaitUntilDrawn { timeout_seconds } => {
-            then_end_frame(DriverStep::WaitUntilDrawn {
-                timeout_seconds: *timeout_seconds,
-            })
-        }
+        DriverCommand::WaitUntilDrawn {
+            timeout_seconds,
+            settle_frames,
+        } => then_end_frame(DriverStep::WaitUntilDrawn {
+            timeout_seconds: *timeout_seconds,
+            settle_frames: *settle_frames,
+        }),
         DriverCommand::Screenshot { path } => {
             then_end_frame(DriverStep::Screenshot { path: path.clone() })
         }
@@ -396,6 +399,7 @@ struct PendingWait {
     until: Option<Instant>,
     drawn_deadline: Option<Instant>,
     drawn_start_render_frame: u32,
+    drawn_settle_frames: u32,
 }
 
 /// How a `wait_until_drawn` wait stands after one more frame.
@@ -495,36 +499,47 @@ impl DriverQueue {
     /// Starts waiting until the game is drawn, giving up `timeout_seconds` of wall-clock time
     /// after `now`. Parsing caps the timeout at 3600 seconds, so the deadline always fits.
     ///
-    /// `render_frame` is the render frame counter now; the wait needs more than
-    /// [`SETTLED_RENDER_FRAMES`] render frames after it, so a "drawn" state left over from
-    /// before the command (such as before a `load_state`) cannot end it.
-    pub fn begin_drawn_wait(&mut self, now: Instant, timeout_seconds: f32, render_frame: u32) {
+    /// The wait ends once `settle_frames` render frames in a row were quiet (see
+    /// [`RenderReadiness::quiet_render_frames`](crate::RenderReadiness::quiet_render_frames)).
+    /// `render_frame` is the render frame counter now; the wait needs more than `settle_frames`
+    /// render frames after it, so a quiet run left over from before the command (such as before
+    /// a `load_state`) cannot end it.
+    pub fn begin_drawn_wait(
+        &mut self,
+        now: Instant,
+        timeout_seconds: f32,
+        settle_frames: u32,
+        render_frame: u32,
+    ) {
         self.wait.drawn_start_render_frame = render_frame;
+        self.wait.drawn_settle_frames = settle_frames;
         let length = Duration::try_from_secs_f32(timeout_seconds).unwrap_or(Duration::ZERO);
         let deadline = now.checked_add(length).unwrap_or(now);
         self.wait.drawn_deadline = Some(deadline);
     }
 
     /// Checks an active `wait_until_drawn` wait against the latest render state. Read
-    /// `render_frame` before `is_drawn`.
+    /// `render_frame` before `quiet_render_frames`.
     pub fn poll_drawn_wait(
         &mut self,
         now: Instant,
         render_frame: u32,
-        is_drawn: bool,
+        quiet_render_frames: u32,
     ) -> DrawnWaitProgress {
         let Some(deadline) = self.wait.drawn_deadline else {
             return DrawnWaitProgress::NotWaiting;
         };
+        let settle_frames = self.wait.drawn_settle_frames;
         let render_frames_since_start =
             render_frame.wrapping_sub(self.wait.drawn_start_render_frame);
-        let progress = if is_drawn && render_frames_since_start > SETTLED_RENDER_FRAMES {
-            DrawnWaitProgress::Drawn
-        } else if now >= deadline {
-            DrawnWaitProgress::TimedOut
-        } else {
-            return DrawnWaitProgress::StillWaiting;
-        };
+        let progress =
+            if quiet_render_frames >= settle_frames && render_frames_since_start > settle_frames {
+                DrawnWaitProgress::Drawn
+            } else if now >= deadline {
+                DrawnWaitProgress::TimedOut
+            } else {
+                return DrawnWaitProgress::StillWaiting;
+            };
         self.wait.drawn_deadline = None;
         progress
     }
@@ -548,7 +563,7 @@ impl DriverQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::parse_command_text;
+    use crate::{commands::parse_command_text, render_readiness::SETTLED_RENDER_FRAMES};
 
     fn expand(text: &str) -> Vec<DriverStep> {
         expand_command(&parse_command_text(text).expect("command should parse"))
@@ -738,7 +753,8 @@ mod tests {
             expand(r#"{"cmd":"wait_until_drawn","timeout_seconds":5}"#),
             vec![
                 DriverStep::WaitUntilDrawn {
-                    timeout_seconds: 5.0
+                    timeout_seconds: 5.0,
+                    settle_frames: SETTLED_RENDER_FRAMES,
                 },
                 DriverStep::EndFrame
             ]
@@ -752,23 +768,23 @@ mod tests {
         let later = start + Duration::from_secs(1);
         let fresh_frame = 10 + SETTLED_RENDER_FRAMES + 1;
         assert_eq!(
-            queue.poll_drawn_wait(start, fresh_frame, true),
+            queue.poll_drawn_wait(start, fresh_frame, SETTLED_RENDER_FRAMES),
             DrawnWaitProgress::NotWaiting
         );
-        queue.begin_drawn_wait(start, 2.0, 10);
+        queue.begin_drawn_wait(start, 2.0, SETTLED_RENDER_FRAMES, 10);
         assert!(!queue.is_idle());
         assert_eq!(
-            queue.poll_drawn_wait(later, fresh_frame, false),
+            queue.poll_drawn_wait(later, fresh_frame, SETTLED_RENDER_FRAMES - 1),
             DrawnWaitProgress::StillWaiting
         );
         assert_eq!(
-            queue.poll_drawn_wait(later, fresh_frame, true),
+            queue.poll_drawn_wait(later, fresh_frame, SETTLED_RENDER_FRAMES),
             DrawnWaitProgress::Drawn
         );
         assert!(queue.is_idle());
-        queue.begin_drawn_wait(start, 2.0, 10);
+        queue.begin_drawn_wait(start, 2.0, SETTLED_RENDER_FRAMES, 10);
         assert_eq!(
-            queue.poll_drawn_wait(start + Duration::from_secs(3), fresh_frame, false),
+            queue.poll_drawn_wait(start + Duration::from_secs(3), fresh_frame, 0),
             DrawnWaitProgress::TimedOut
         );
         assert!(queue.is_idle());
@@ -778,12 +794,12 @@ mod tests {
     fn drawn_state_from_before_the_wait_does_not_end_it() {
         let mut queue = DriverQueue::default();
         let start = Instant::now();
-        queue.begin_drawn_wait(start, 2.0, u32::MAX - 1);
+        queue.begin_drawn_wait(start, 2.0, SETTLED_RENDER_FRAMES, u32::MAX - 1);
         assert_eq!(
             queue.poll_drawn_wait(
                 start,
                 (u32::MAX - 1).wrapping_add(SETTLED_RENDER_FRAMES),
-                true
+                SETTLED_RENDER_FRAMES
             ),
             DrawnWaitProgress::StillWaiting
         );
@@ -791,8 +807,36 @@ mod tests {
             queue.poll_drawn_wait(
                 start,
                 (u32::MAX - 1).wrapping_add(SETTLED_RENDER_FRAMES + 1),
-                true
+                SETTLED_RENDER_FRAMES
             ),
+            DrawnWaitProgress::Drawn
+        );
+    }
+
+    #[test]
+    fn settle_frames_sets_how_many_quiet_frames_end_the_wait() {
+        let mut queue = DriverQueue::default();
+        let start = Instant::now();
+        queue.begin_drawn_wait(start, 2.0, 1, 10);
+        assert_eq!(
+            queue.poll_drawn_wait(start, 11, 1),
+            DrawnWaitProgress::StillWaiting
+        );
+        assert_eq!(
+            queue.poll_drawn_wait(start, 12, 0),
+            DrawnWaitProgress::StillWaiting
+        );
+        assert_eq!(
+            queue.poll_drawn_wait(start, 12, 1),
+            DrawnWaitProgress::Drawn
+        );
+        queue.begin_drawn_wait(start, 2.0, 5, 10);
+        assert_eq!(
+            queue.poll_drawn_wait(start, 20, 4),
+            DrawnWaitProgress::StillWaiting
+        );
+        assert_eq!(
+            queue.poll_drawn_wait(start, 20, 5),
             DrawnWaitProgress::Drawn
         );
     }

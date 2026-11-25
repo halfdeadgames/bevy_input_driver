@@ -60,8 +60,8 @@ pub struct DriverStatus {
     pub virtual_elapsed_seconds: f64,
     /// The most recent 50 finished `save_state` and `load_state` operations.
     pub state_operations: Vec<String>,
-    /// True once the render pipelines in use have compiled and stayed steady for a few frames,
-    /// the condition `wait_until_drawn` waits for. Refreshed once per frame; always false
+    /// True once the render pipelines in use have compiled and stayed steady for 3 frames,
+    /// the condition `wait_until_drawn` waits for unless it gives another `settle_frames`. Refreshed once per frame; always false
     /// without a renderer.
     pub render_ready: bool,
     /// Render pipelines still queued or compiling. Refreshed once per frame.
