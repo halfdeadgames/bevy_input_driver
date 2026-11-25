@@ -1,0 +1,28 @@
+[package]
+name = "bevy_input_driver"
+version = "0.1.0"
+edition = "2024"
+description = "Drive a running Bevy game with injected input and screenshots over BRP or a script file."
+publish = false
+
+[dependencies]
+bevy = { version = "0.20.1", default-features = false, features = [
+    "std",
+    "bevy_log",
+    "bevy_window",
+    "bevy_render",
+    "bevy_remote",
+    "serialize",
+    "png",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+bevy = "0.20.1"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
