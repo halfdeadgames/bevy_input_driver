@@ -112,8 +112,9 @@ The driver watches Bevy's `PipelineCache` in the render world. The game counts a
 
 On Windows, Bevy reports a minimized window's size as 0 by 0, and `window_minimized` is true exactly when `window_size` is `[0, 0]`. Other platforms may keep the size while minimized, so there the field may stay false. While minimized, `frame_count` and `render_frame_count` keep rising as usual, and `wait_until_drawn` succeeds even though nothing is on screen (tested on Windows 11 with Bevy 0.20.1). Do not minimize a game under test:
 
-- In the demo scene, minimizing alone left the window as a 16 by 16 frame at the top-left of the screen with nothing drawn, and restoring did not bring it back. `window_size` stays `[0, 0]` in that state, so `window_minimized` stays true and a script can spot it. In another game, minimizing and restoring worked, but a `screenshot` taken while minimized broke the window the same way, and every later screenshot was a 1 by 1 image with no error. The cause is not known yet.
-- Check `window_minimized` before a `screenshot` or a `wait_until_drawn` in a script that might run while the window is minimized.
+- In the demo scene, minimizing alone left the window as a 16 by 16 frame at the top-left of the screen with nothing drawn, and restoring did not bring it back. `window_size` stays `[0, 0]` in that state, so `window_minimized` stays true and a script can spot it. In another game, minimizing and restoring worked, but a `screenshot` taken while minimized broke the window the same way, and every later screenshot was a 1 by 1 image with no error (the driver now refuses that screenshot, as the next point says). The cause of the demo scene's breakage is not known yet.
+- While `window_minimized` is true, the driver refuses a `screenshot`: it captures nothing and records the error `screenshot <path>: window is minimized (0x0), skipped`, and the script goes on. Where the field stays false while minimized (on some platforms other than Windows), the screenshot is still taken.
+- Check `window_minimized` before a `wait_until_drawn` in a script that might run while the window is minimized.
 
 ## Seeds and repeatable tests
 

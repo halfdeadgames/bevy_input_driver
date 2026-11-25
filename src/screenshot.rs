@@ -37,7 +37,17 @@ impl std::error::Error for ScreenshotSaveError {}
 ///
 /// When the capture arrives, the image is saved to `path` (the format follows the file
 /// extension, so use `.png`) and [`DriverStatus`] is updated with the result.
+///
+/// While [`DriverStatus::window_minimized`] is true, nothing is captured and an error is
+/// recorded instead.
 pub fn request_screenshot(commands: &mut Commands, status: &mut DriverStatus, path: String) {
+    // On Windows, capturing a 0 by 0 window breaks it for good: later captures are 1 by 1 images.
+    if status.window_minimized {
+        status.record_error(format!(
+            "screenshot {path}: window is minimized (0x0), skipped"
+        ));
+        return;
+    }
     status.pending_screenshots.push(path.clone());
     commands.spawn(Screenshot::primary_window()).observe(
         move |captured: On<ScreenshotCaptured>, mut status: ResMut<DriverStatus>| match save_image(
@@ -64,4 +74,39 @@ fn save_image(image: Image, path: &Path) -> Result<(), ScreenshotSaveError> {
         .to_rgb8()
         .save(path)
         .map_err(|source| ScreenshotSaveError::WriteFile(source.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn screenshots_requested_with(mut status: DriverStatus) -> (DriverStatus, usize) {
+        let mut world = World::new();
+        request_screenshot(&mut world.commands(), &mut status, "shot.png".to_owned());
+        world.flush();
+        let capture_count = world.query::<&Screenshot>().iter(&world).count();
+        (status, capture_count)
+    }
+
+    #[test]
+    fn minimized_window_skips_the_capture_and_records_an_error() {
+        let (status, capture_count) = screenshots_requested_with(DriverStatus {
+            window_minimized: true,
+            ..default()
+        });
+        assert_eq!(capture_count, 0);
+        assert!(status.pending_screenshots.is_empty());
+        assert_eq!(
+            status.errors,
+            vec!["screenshot shot.png: window is minimized (0x0), skipped".to_owned()]
+        );
+    }
+
+    #[test]
+    fn visible_window_queues_a_capture() {
+        let (status, capture_count) = screenshots_requested_with(DriverStatus::default());
+        assert_eq!(capture_count, 1);
+        assert_eq!(status.pending_screenshots, vec!["shot.png".to_owned()]);
+        assert!(status.errors.is_empty());
+    }
 }
