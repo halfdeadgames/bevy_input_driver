@@ -4,11 +4,11 @@ Lets an automated tester drive a running Bevy 0.20 game. It injects keyboard, mo
 
 ## Setup
 
-In the game's `Cargo.toml`, make the driver an optional path dependency behind a feature:
+In the game's `Cargo.toml`, make the driver an optional git dependency behind a feature:
 
 ```toml
 [dependencies]
-bevy_input_driver = { path = "../bevy_input_driver", optional = true }
+bevy_input_driver = { git = "https://github.com/halfdeadgames/bevy_input_driver", optional = true }
 
 [features]
 input_driver = ["dep:bevy_input_driver"]
@@ -132,3 +132,9 @@ fn save_game_state(In(path): In<PathBuf>, player: Single<&Transform, With<Player
 - Screenshot paths are relative to the process working directory. Parent folders are created. Use a `.png` extension, since the format follows the extension.
 - The `drive/*` methods run in `Update`, so a paused or unfocused game that stops updating also stops the driver.
 - Commands with no primary window are skipped and an error is recorded.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT), at your option, the same as Bevy.
+
+Unless you explicitly state otherwise, any contribution you intentionally submit for inclusion in this work, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.

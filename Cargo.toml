@@ -3,6 +3,11 @@ name = "bevy_input_driver"
 version = "0.1.0"
 edition = "2024"
 description = "Drive a running Bevy game with injected input and screenshots over BRP or a script file."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/halfdeadgames/bevy_input_driver"
+readme = "README.md"
+keywords = ["bevy", "testing", "automation", "input", "screenshot"]
+categories = ["game-development", "development-tools::testing"]
 publish = false
 
 [dependencies]
