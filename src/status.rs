@@ -66,6 +66,11 @@ pub struct DriverStatus {
     pub render_ready: bool,
     /// Render pipelines still queued or compiling. Refreshed once per frame.
     pub pipelines_pending: usize,
+    /// Frames the renderer has finished drawing, wrapping at `u32::MAX`, or none without a
+    /// renderer. Refreshed once per frame. It usually runs 1 or 2 behind `frame_count`, because a
+    /// frame is drawn while the next one runs; if `frame_count` rises and this stays the same,
+    /// drawing has stopped (for example, in a minimized window).
+    pub render_frame_count: Option<u32>,
 }
 
 /// Logs an error and records it in [`DriverStatus`] from code that only has the world.
@@ -93,6 +98,7 @@ impl DriverStatus {
     pub fn refresh_render_readiness(&mut self, readiness: Option<&RenderReadiness>) {
         self.render_ready = readiness.is_some_and(RenderReadiness::is_drawn);
         self.pipelines_pending = readiness.map_or(0, RenderReadiness::pending_pipelines);
+        self.render_frame_count = readiness.map(RenderReadiness::render_frames_published);
     }
 
     /// Copies queue-derived fields so a reader sees the queue as it is right now.

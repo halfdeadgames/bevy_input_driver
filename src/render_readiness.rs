@@ -208,6 +208,18 @@ mod tests {
     }
 
     #[test]
+    fn status_reports_render_frames_or_none_without_a_renderer() {
+        let readiness = RenderReadiness::default();
+        readiness.publish(snapshot(1, 0), 0);
+        readiness.publish(snapshot(1, 0), 1);
+        let mut status = crate::status::DriverStatus::default();
+        status.refresh_render_readiness(Some(&readiness));
+        assert_eq!(status.render_frame_count, Some(2));
+        status.refresh_render_readiness(None);
+        assert_eq!(status.render_frame_count, None);
+    }
+
+    #[test]
     fn finds_a_render_sub_app_added_after_the_plugin() {
         let mut app = App::new();
         app.add_plugins(DriverRenderReadinessPlugin);
