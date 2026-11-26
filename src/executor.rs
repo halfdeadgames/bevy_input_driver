@@ -4,10 +4,12 @@ use std::time::Instant;
 
 use bevy::{
     app::AppExit,
+    ecs::system::NonSendMarker,
     input::{ButtonState, InputSystems, touch::TouchPhase},
     prelude::*,
     window::PrimaryWindow,
 };
+use bevy_winit::WINIT_WINDOWS;
 
 use crate::{
     injection::{InjectionError, InputInjector},
@@ -38,16 +40,27 @@ impl Plugin for DriverExecutorPlugin {
     }
 }
 
-/// Copies the primary window's physical size into [`DriverStatus`].
+/// Copies the primary window's physical size and winit's minimized answer into
+/// [`DriverStatus`].
+// `NonSendMarker` keeps this on the main thread, the only thread whose `WINIT_WINDOWS` is filled.
 pub fn refresh_window_status(
-    primary_window: Query<&Window, With<PrimaryWindow>>,
+    primary_window: Query<(Entity, &Window), With<PrimaryWindow>>,
     mut status: ResMut<DriverStatus>,
+    _main_thread: NonSendMarker,
 ) {
-    let physical_size = primary_window
-        .single()
-        .ok()
-        .map(|window| [window.physical_width(), window.physical_height()]);
-    status.refresh_window_size(physical_size);
+    let primary_window = primary_window.single().ok();
+    let physical_size =
+        primary_window.map(|(_, window)| [window.physical_width(), window.physical_height()]);
+    let os_minimized = primary_window.and_then(|(entity, _)| winit_reports_minimized(entity));
+    status.refresh_window_state(physical_size, os_minimized);
+}
+
+fn winit_reports_minimized(window_entity: Entity) -> Option<bool> {
+    WINIT_WINDOWS.with_borrow(|winit_windows| {
+        winit_windows
+            .get_window(window_entity)
+            .and_then(|winit_window| winit_window.is_minimized())
+    })
 }
 
 /// Runs steps until a barrier or wait, so injected input is read by `InputSystems` this frame.

@@ -74,9 +74,14 @@ pub struct DriverStatus {
     /// The primary window's size in physical pixels, or none without a primary window.
     /// Refreshed once per frame.
     pub window_size: Option<[u32; 2]>,
-    /// True when the primary window's size is 0 by 0, which is how Windows reports a minimized
-    /// window. Other platforms may keep the size while minimized. Refreshed once per frame.
+    /// True when `window_os_minimized` is true or the primary window's size is 0 by 0. Windows
+    /// reports a minimized window as 0 by 0; other platforms may keep the size. Refreshed once
+    /// per frame.
     pub window_minimized: bool,
+    /// What winit says about the primary window: true when minimized, false when not, or none
+    /// when it cannot tell (Wayland, iOS, Android, the web, a game without winit, or no primary
+    /// window). Refreshed once per frame.
+    pub window_os_minimized: Option<bool>,
 }
 
 /// Logs an error and records it in [`DriverStatus`] from code that only has the world.
@@ -107,10 +112,18 @@ impl DriverStatus {
         self.render_frame_count = readiness.map(RenderReadiness::render_frames_published);
     }
 
-    /// Copies the primary window's physical size, or clears it without a primary window.
-    pub fn refresh_window_size(&mut self, physical_size: Option<[u32; 2]>) {
+    /// Copies the primary window's physical size and winit's minimized answer, or clears both
+    /// without a primary window.
+    pub fn refresh_window_state(
+        &mut self,
+        physical_size: Option<[u32; 2]>,
+        os_minimized: Option<bool>,
+    ) {
         self.window_size = physical_size;
-        self.window_minimized = physical_size == Some([0, 0]);
+        self.window_os_minimized = os_minimized;
+        // The size check stays even where winit answers: on Windows a window can end up 0 by 0
+        // while the OS says it is not minimized, and screenshots of it come back 1 by 1.
+        self.window_minimized = os_minimized == Some(true) || physical_size == Some([0, 0]);
     }
 
     /// Copies queue-derived fields so a reader sees the queue as it is right now.
@@ -236,16 +249,34 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_sized_window_counts_as_minimized() {
+    fn a_zero_sized_window_counts_as_minimized_whatever_winit_says() {
         let mut status = DriverStatus::default();
-        status.refresh_window_size(Some([0, 0]));
+        for os_minimized in [None, Some(false), Some(true)] {
+            status.refresh_window_state(Some([0, 0]), os_minimized);
+            assert!(status.window_minimized);
+            assert_eq!(status.window_os_minimized, os_minimized);
+        }
+    }
+
+    #[test]
+    fn winit_reporting_minimized_counts_even_when_the_size_is_kept() {
+        let mut status = DriverStatus::default();
+        status.refresh_window_state(Some([1280, 720]), Some(true));
         assert!(status.window_minimized);
-        status.refresh_window_size(Some([1280, 720]));
-        assert!(!status.window_minimized);
         assert_eq!(status.window_size, Some([1280, 720]));
-        status.refresh_window_size(None);
+    }
+
+    #[test]
+    fn a_sized_window_is_not_minimized_unless_winit_says_so() {
+        let mut status = DriverStatus::default();
+        for os_minimized in [None, Some(false)] {
+            status.refresh_window_state(Some([1280, 720]), os_minimized);
+            assert!(!status.window_minimized);
+        }
+        status.refresh_window_state(None, None);
         assert!(!status.window_minimized);
         assert_eq!(status.window_size, None);
+        assert_eq!(status.window_os_minimized, None);
     }
 
     #[test]

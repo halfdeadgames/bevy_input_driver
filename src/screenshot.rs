@@ -43,9 +43,7 @@ impl std::error::Error for ScreenshotSaveError {}
 pub fn request_screenshot(commands: &mut Commands, status: &mut DriverStatus, path: String) {
     // On Windows, capturing a 0 by 0 window breaks it for good: later captures are 1 by 1 images.
     if status.window_minimized {
-        status.record_error(format!(
-            "screenshot {path}: window is minimized (0x0), skipped"
-        ));
+        status.record_error(format!("screenshot {path}: window is minimized, skipped"));
         return;
     }
     status.pending_screenshots.push(path.clone());
@@ -98,7 +96,7 @@ mod tests {
         assert!(status.pending_screenshots.is_empty());
         assert_eq!(
             status.errors,
-            vec!["screenshot shot.png: window is minimized (0x0), skipped".to_owned()]
+            vec!["screenshot shot.png: window is minimized, skipped".to_owned()]
         );
     }
 
