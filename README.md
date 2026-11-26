@@ -60,7 +60,7 @@ One JSON object per command, tagged by `cmd`. Positions are logical pixels in th
 | `step_frames` | `{"cmd":"step_frames","frames":5}` (resume, run exactly 5 frames, pause; at least 1) |
 | `save_state` / `load_state` | `{"cmd":"save_state","path":"saves/slot1.txt"}` (runs your registered hook) |
 
-Frame counts (`hold_frames`, `frames`, and `wait_frames`) are capped at 100000 per command; larger values are rejected. `click`, `drag`, `touch`, `touch_drag`, and `scroll` end with an extra frame so `bevy_picking`, which reads window events a frame late, has finished before the next command (such as a screenshot) runs. `clear` also cancels touches the driver started and pauses time again if a `step_frames` was running.
+Frame counts (`hold_frames`, `frames`, and `wait_frames`) are capped at 100000 per command; larger values are rejected. `click`, `drag`, `touch`, `touch_drag`, and `scroll` end with an extra frame so `bevy_picking`, which reads window events a frame late, has finished before the next command (such as a screenshot) runs. `drive/clear` also cancels touches the driver started, and pauses time again if a `step_frames` was running.
 
 Every command is visible to game systems for at least one frame of its own. `key_tap` is down, wait `hold_frames`, up, wait one frame, because a press and release in one frame are invisible to `pressed()`. `drag` moves to `from`, presses, makes `frames` evenly spaced moves ending exactly at `to`, and releases.
 
@@ -158,7 +158,6 @@ fn save_game_state(In(path): In<PathBuf>, player: Single<&Transform, With<Player
 
 - `wait_seconds` uses wall-clock time, so it keeps counting while virtual time is paused. `wait_frames` counts rendered frames and also keeps running.
 - `Time<Virtual>` clamps each frame's advance to its max delta (250 ms by default). A `time_fixed_step` above that raises the max delta to the step, and `time_real` restores 250 ms.
-
 - Keep your real mouse and keyboard off the game window during tests. Real input mixes with injected input.
 - Only one `RemotePlugin` may exist. The driver adds it when `enable_remote` is true.
 - Screenshot paths are relative to the process working directory. Parent folders are created. Use a `.png` extension, since the format follows the extension.
