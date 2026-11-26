@@ -27,7 +27,7 @@ pub mod window_control;
 
 pub use commands::{CommandParseError, DriverCommand};
 pub use plugin::InputDriverPlugin;
-pub use render_readiness::RenderReadiness;
+pub use render_readiness::{FailedPipeline, RenderReadiness};
 pub use seed::DriverSeed;
 pub use state_handlers::{DriverStateHandlers, InputDriverAppExt};
 pub use status::DriverStatus;

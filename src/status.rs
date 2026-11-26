@@ -8,7 +8,10 @@ use bevy::{
 };
 use serde::Serialize;
 
-use crate::{render_readiness::RenderReadiness, steps::DriverQueue};
+use crate::{
+    render_readiness::{FailedPipeline, RenderReadiness},
+    steps::DriverQueue,
+};
 
 const MAX_RECORDED_ERRORS: usize = 50;
 const MAX_RECORDED_STATE_OPERATIONS: usize = 50;
@@ -66,6 +69,10 @@ pub struct DriverStatus {
     pub render_ready: bool,
     /// Render pipelines still queued or compiling. Refreshed once per frame.
     pub pipelines_pending: usize,
+    /// Render pipelines whose shaders failed to compile and will not be retried, with the
+    /// pipeline label, shader asset paths, and Bevy's error text. Refreshed once per frame; empty
+    /// without a renderer.
+    pub failed_pipelines: Vec<FailedPipeline>,
     /// Runs of Bevy's `Render` schedule so far, wrapping at `u32::MAX`, or none without a
     /// renderer. Refreshed once per frame. It usually runs 1 or 2 behind `frame_count`, because a
     /// frame is drawn while the next one runs. It counts render runs, not frames shown on screen,
@@ -110,6 +117,14 @@ impl DriverStatus {
         self.render_ready = readiness.is_some_and(RenderReadiness::is_drawn);
         self.pipelines_pending = readiness.map_or(0, RenderReadiness::pending_pipelines);
         self.render_frame_count = readiness.map(RenderReadiness::render_frames_published);
+        self.refresh_failed_pipelines(readiness);
+    }
+
+    fn refresh_failed_pipelines(&mut self, readiness: Option<&RenderReadiness>) {
+        match readiness {
+            Some(readiness) => readiness.copy_failed_pipelines_into(&mut self.failed_pipelines),
+            None => self.failed_pipelines.clear(),
+        }
     }
 
     /// Copies the primary window's physical size and winit's minimized answer, or clears both

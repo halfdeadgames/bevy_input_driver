@@ -164,8 +164,9 @@ fn drawn_timeout_message(readiness: Option<&RenderReadiness>) -> String {
 fn report_failed_pipelines(readiness: Option<&RenderReadiness>, status: &mut DriverStatus) {
     let failed = readiness.map_or(0, RenderReadiness::failed_pipelines);
     if failed > 0 {
+        let noun = if failed == 1 { "pipeline" } else { "pipelines" };
         status.record_error(format!(
-            "wait_until_drawn: {failed} pipelines failed to compile; the log has the shader errors"
+            "wait_until_drawn: {failed} {noun} failed to compile; see failed_pipelines in drive/status"
         ));
     }
 }
