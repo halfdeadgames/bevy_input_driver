@@ -1,6 +1,6 @@
 //! Asking Bevy to minimize or restore the primary window.
 
-use bevy::{prelude::*, window::PrimaryWindow};
+use bevy::{ecs::query::QuerySingleError, prelude::*, window::PrimaryWindow};
 
 use crate::status::record_error_in_world;
 
@@ -34,11 +34,15 @@ pub fn queue_window_action(commands: &mut Commands, action: WindowAction) {
 
 fn apply_window_action(world: &mut World, action: WindowAction) {
     let mut primary_windows = world.query_filtered::<&mut Window, With<PrimaryWindow>>();
-    if let Ok(mut window) = primary_windows.single_mut(world) {
-        window.set_minimized(action.wants_minimized());
-        return;
-    }
-    let message = format!("{}: no primary window", action.command_name());
+    let problem = match primary_windows.single_mut(world) {
+        Ok(mut window) => {
+            window.set_minimized(action.wants_minimized());
+            return;
+        }
+        Err(QuerySingleError::NoEntities(_)) => "no primary window",
+        Err(QuerySingleError::MultipleEntities(_)) => "more than one primary window",
+    };
+    let message = format!("{}: {problem}", action.command_name());
     record_error_in_world(world, message);
 }
 
@@ -85,5 +89,26 @@ mod tests {
         assert_eq!(errors.len(), 2);
         assert!(errors[0].contains("window_minimize: no primary window"));
         assert!(errors[1].contains("window_restore: no primary window"));
+    }
+
+    #[test]
+    fn two_primary_windows_are_named_in_the_error_and_left_alone() {
+        let mut world = world_with_status();
+        let first_window = world.spawn((Window::default(), PrimaryWindow)).id();
+        world.spawn((Window::default(), PrimaryWindow));
+
+        apply_window_action(&mut world, WindowAction::Minimize);
+
+        let errors = &world.resource::<DriverStatus>().errors;
+        assert_eq!(
+            errors,
+            &vec!["window_minimize: more than one primary window".to_owned()]
+        );
+        let request = world
+            .get_mut::<Window>(first_window)
+            .expect("window exists")
+            .internal
+            .take_minimize_request();
+        assert_eq!(request, None);
     }
 }

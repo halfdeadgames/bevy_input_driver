@@ -117,7 +117,7 @@ On Windows, Bevy reports a minimized window's size as 0 by 0, and `window_minimi
 - While `window_minimized` is true, the driver refuses a `screenshot`: it captures nothing and records the error `screenshot <path>: window is minimized (0x0), skipped`, and the script goes on. Where the field stays false while minimized (on some platforms other than Windows), the screenshot is still taken.
 - Check `window_minimized` before a `wait_until_drawn` in a script that might run while the window is minimized.
 
-To test this on purpose, `window_minimize` and `window_restore` ask Bevy to minimize or restore the primary window (`Window::set_minimized`), then wait one frame. They only send the request: the operating system applies it a few frames later, or not at all. Follow each one with a `wait_frames` and read `window_minimized` in `drive/status` to see what happened. Without a primary window, each records an error such as `window_minimize: no primary window` and the script goes on.
+To test this on purpose, `window_minimize` and `window_restore` ask Bevy to minimize or restore the primary window (`Window::set_minimized`), then wait one frame. They only send the request: the operating system applies it a few frames later, or not at all. Follow each one with a `wait_frames` and read `window_minimized` in `drive/status` to see what happened. Put a `wait_frames` between a `window_minimize` and a `screenshot` too: in 6 tries on Windows the one frame was enough for the screenshot guard to see the minimized window, but a slower machine may need longer. Without a primary window, or with more than one, each records an error such as `window_minimize: no primary window` and the script goes on.
 
 ## Seeds and repeatable tests
 
