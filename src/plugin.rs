@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use bevy::{prelude::*, remote::http::DEFAULT_PORT};
 
 use crate::{
+    checks::DriverChecksPlugin,
     executor::DriverExecutorPlugin,
     remote::DriverRemotePlugin,
     render_readiness::DriverRenderReadinessPlugin,
@@ -77,6 +78,7 @@ impl Plugin for InputDriverPlugin {
             DriverSeedPlugin { seed: self.seed },
             DriverTimeControlPlugin,
             DriverStateHandlersPlugin,
+            DriverChecksPlugin,
             DriverRenderReadinessPlugin,
         ))
         .add_systems(Startup, (load_script_file, log_driver_startup).chain());

@@ -1,8 +1,12 @@
 //! BRP methods: `drive/send`, `drive/status`, and `drive/clear`.
 
 use bevy::{
+    ecs::system::SystemId,
     prelude::*,
-    remote::{BrpError, BrpResult, RemotePlugin, error_codes, http::RemoteHttpPlugin},
+    remote::{
+        BrpError, BrpResult, RemoteMethodSystemId, RemoteMethods, RemotePlugin, error_codes,
+        http::RemoteHttpPlugin,
+    },
 };
 use serde_json::{Value, json};
 
@@ -18,6 +22,45 @@ pub const SEND_METHOD: &str = "drive/send";
 pub const STATUS_METHOD: &str = "drive/status";
 /// BRP method that empties the queue and releases everything held.
 pub const CLEAR_METHOD: &str = "drive/clear";
+
+/// One-shot system id of a game-provided BRP method.
+pub type RemoteMethodSystem = SystemId<In<Option<Value>>, BrpResult>;
+
+/// Game methods registered before `RemotePlugin` built `RemoteMethods`.
+#[derive(Resource, Debug, Default)]
+pub struct PendingRemoteMethods {
+    methods: Vec<(String, RemoteMethodSystem)>,
+}
+
+/// Registers the handler as the BRP method `name`, now if `RemoteMethods` exists, else when
+/// [`DriverRemotePlugin`] builds.
+pub fn register_remote_method<Marker>(
+    app: &mut App,
+    name: String,
+    handler: impl IntoSystem<In<Option<Value>>, BrpResult, Marker> + 'static,
+) {
+    let system = app.register_system(handler);
+    match app.world_mut().get_resource_mut::<RemoteMethods>() {
+        Some(mut methods) => {
+            methods.insert(name, RemoteMethodSystemId::Instant(system));
+        }
+        None => app
+            .world_mut()
+            .get_resource_or_insert_with(PendingRemoteMethods::default)
+            .methods
+            .push((name, system)),
+    }
+}
+
+fn drain_pending_remote_methods(app: &mut App) {
+    let Some(pending) = app.world_mut().remove_resource::<PendingRemoteMethods>() else {
+        return;
+    };
+    let mut methods = app.world_mut().resource_mut::<RemoteMethods>();
+    for (name, system) in pending.methods {
+        methods.insert(name, RemoteMethodSystemId::Instant(system));
+    }
+}
 
 /// Adds `RemotePlugin` with the driver methods, and the HTTP transport on `port`.
 ///
@@ -36,6 +79,7 @@ impl Plugin for DriverRemotePlugin {
                 .with_method_main(CLEAR_METHOD, clear_method),
             RemoteHttpPlugin::default().with_port(self.port),
         ));
+        drain_pending_remote_methods(app);
     }
 }
 
@@ -125,6 +169,31 @@ mod tests {
             .expect_err("bad command should fail");
         assert_eq!(error.code, error_codes::INVALID_PARAMS);
         assert!(error.message.contains("command 1"), "{}", error.message);
+    }
+
+    fn echo_params(In(params): In<Option<Value>>) -> BrpResult {
+        Ok(params.unwrap_or(Value::Null))
+    }
+
+    #[test]
+    fn game_methods_registered_before_the_remote_plugin_are_added_when_it_builds() {
+        let mut app = App::new();
+        register_remote_method(&mut app, "game/echo".to_owned(), echo_params);
+        app.add_plugins(RemotePlugin::default());
+        drain_pending_remote_methods(&mut app);
+        let methods = app.world().resource::<RemoteMethods>();
+        assert!(methods.get("game/echo").is_some());
+        assert!(app.world().get_resource::<PendingRemoteMethods>().is_none());
+    }
+
+    #[test]
+    fn game_methods_registered_after_the_remote_plugin_are_added_at_once() {
+        let mut app = App::new();
+        app.add_plugins(RemotePlugin::default());
+        register_remote_method(&mut app, "game/echo".to_owned(), echo_params);
+        let methods = app.world().resource::<RemoteMethods>();
+        assert!(methods.get("game/echo").is_some());
+        assert!(app.world().get_resource::<PendingRemoteMethods>().is_none());
     }
 
     #[test]

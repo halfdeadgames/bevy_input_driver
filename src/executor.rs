@@ -3,7 +3,6 @@
 use std::time::Instant;
 
 use bevy::{
-    app::AppExit,
     ecs::system::NonSendMarker,
     input::{ButtonState, InputSystems, touch::TouchPhase},
     prelude::*,
@@ -12,6 +11,7 @@ use bevy::{
 use bevy_winit::WINIT_WINDOWS;
 
 use crate::{
+    checks::{queue_check, queue_quit},
     injection::{InjectionError, InputInjector},
     plugin::DriverSettings,
     render_readiness::RenderReadiness,
@@ -71,7 +71,6 @@ pub fn execute_driver_steps(
     readiness: Option<Res<RenderReadiness>>,
     mut injector: InputInjector,
     mut commands: Commands,
-    mut app_exit: MessageWriter<AppExit>,
 ) {
     status.frame_count += 1;
     // Wall-clock time, because `time_fixed_step` makes `Time<Real>` advance by a fixed amount.
@@ -134,7 +133,6 @@ pub fn execute_driver_steps(
                         &mut injector,
                         &mut status,
                         &mut commands,
-                        &mut app_exit,
                         settings.update_window_cursor_position,
                     ) {
                         status.record_error(problem.to_string());
@@ -176,7 +174,6 @@ fn apply_step(
     injector: &mut InputInjector,
     status: &mut DriverStatus,
     commands: &mut Commands,
-    app_exit: &mut MessageWriter<AppExit>,
     update_window_cursor_position: bool,
 ) -> Result<(), InjectionError> {
     match step {
@@ -216,9 +213,12 @@ fn apply_step(
         DriverStep::Screenshot { path } => request_screenshot(commands, status, path.clone()),
         DriverStep::Window(action) => queue_window_action(commands, *action),
         DriverStep::ReleaseAll => release_everything_held(injector, status)?,
-        DriverStep::Quit => {
-            app_exit.write(AppExit::Success);
-        }
+        DriverStep::Quit => queue_quit(commands),
+        DriverStep::Check {
+            check,
+            args,
+            equals,
+        } => queue_check(commands, check.clone(), args.clone(), equals.clone()),
         DriverStep::SetSeed(seed) => queue_set_seed(commands, *seed),
         DriverStep::Time(action) => queue_time_action(commands, *action),
         DriverStep::State { operation, path } => {

@@ -9,12 +9,14 @@ use bevy::{
 use serde::Serialize;
 
 use crate::{
+    checks::CheckResult,
     render_readiness::{FailedPipeline, RenderReadiness},
     steps::DriverQueue,
 };
 
 const MAX_RECORDED_ERRORS: usize = 50;
 const MAX_RECORDED_STATE_OPERATIONS: usize = 50;
+const MAX_RECORDED_CHECKS: usize = 50;
 
 /// A finger the driver put down and has not lifted.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -89,6 +91,11 @@ pub struct DriverStatus {
     /// when it cannot tell (Wayland, iOS, Android, the web, a game without winit, or no primary
     /// window). Refreshed once per frame.
     pub window_os_minimized: Option<bool>,
+    /// The most recent 50 `expect` results, oldest first.
+    pub checks: Vec<CheckResult>,
+    /// Failed `expect` commands over the whole process. Never capped, and `drive/clear` does not
+    /// reset it, because a `quit` turns any failure into exit code 1.
+    pub checks_failed: u64,
 }
 
 /// Logs an error and records it in [`DriverStatus`] from code that only has the world.
@@ -108,6 +115,21 @@ impl DriverStatus {
             .len()
             .saturating_sub(MAX_RECORDED_STATE_OPERATIONS);
         self.state_operations.drain(..excess);
+    }
+}
+
+impl DriverStatus {
+    /// Records an `expect` result, dropping the oldest past 50. A failure also counts in
+    /// [`DriverStatus::checks_failed`] and is added to [`DriverStatus::errors`].
+    pub fn note_check_result(&mut self, result: CheckResult) {
+        if !result.passed {
+            self.checks_failed += 1;
+            let reason = result.message.as_deref().unwrap_or("failed");
+            self.record_error(format!("expect {}: {reason}", result.check));
+        }
+        self.checks.push(result);
+        let excess = self.checks.len().saturating_sub(MAX_RECORDED_CHECKS);
+        self.checks.drain(..excess);
     }
 }
 

@@ -236,7 +236,7 @@ pub enum DriverCommand {
     WindowRestore {},
     /// Release every key and button the driver holds.
     ReleaseAll {},
-    /// Write `AppExit::Success`.
+    /// Exit the app: `AppExit::Success`, or `AppExit::error()` (code 1) when any `expect` failed.
     Quit {},
     /// Set `DriverSeed` to this value.
     SetSeed {
@@ -273,6 +273,19 @@ pub enum DriverCommand {
     LoadState {
         /// File path handed to the hook.
         path: String,
+    },
+    /// Run a check the game registered with `add_driver_check` in the frame after everything
+    /// before it, and record whether it passed in `drive/status`.
+    Expect {
+        /// Name the check was registered under.
+        check: String,
+        /// Input handed to the check; `null` when absent.
+        #[serde(default)]
+        args: Option<Value>,
+        /// Value the check must return. Numbers compare by numeric value, everything else
+        /// exactly. Without it, any returned value passes.
+        #[serde(default)]
+        equals: Option<Value>,
     },
 }
 
@@ -606,6 +619,36 @@ mod tests {
                 path: "slot.txt".to_owned()
             }
         );
+    }
+
+    #[test]
+    fn parses_expect_with_and_without_args_and_equals() {
+        assert_eq!(
+            parse(r#"{"cmd":"expect","check":"alive"}"#),
+            DriverCommand::Expect {
+                check: "alive".to_owned(),
+                args: None,
+                equals: None
+            }
+        );
+        assert_eq!(
+            parse(r#"{"cmd":"expect","check":"hp","args":{"who":1},"equals":[5,6.5]}"#),
+            DriverCommand::Expect {
+                check: "hp".to_owned(),
+                args: Some(serde_json::json!({"who": 1})),
+                equals: Some(serde_json::json!([5, 6.5]))
+            }
+        );
+        assert_eq!(
+            parse(r#"{"cmd":"expect","check":"flag","equals":false}"#),
+            DriverCommand::Expect {
+                check: "flag".to_owned(),
+                args: None,
+                equals: Some(Value::Bool(false))
+            }
+        );
+        assert!(parse_command_text(r#"{"cmd":"expect"}"#).is_err());
+        assert!(parse_command_text(r#"{"cmd":"expect","check":"a","extra":1}"#).is_err());
     }
 
     #[test]

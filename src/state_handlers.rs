@@ -2,9 +2,14 @@
 
 use std::{fmt, path::PathBuf};
 
-use bevy::{ecs::system::SystemId, prelude::*};
+use bevy::{ecs::system::SystemId, prelude::*, remote::BrpResult};
+use serde_json::Value;
 
-use crate::status::{DriverStatus, record_error_in_world};
+use crate::{
+    checks::register_driver_check,
+    remote::register_remote_method,
+    status::{DriverStatus, record_error_in_world},
+};
 
 /// One-shot system id of a hook that receives the file path from the command.
 pub type StateHandlerId = SystemId<In<PathBuf>, Result<(), String>>;
@@ -140,9 +145,53 @@ pub trait InputDriverAppExt {
         save_system: impl IntoSystem<In<PathBuf>, Result<(), String>, SaveMarker> + 'static,
         load_system: impl IntoSystem<In<PathBuf>, Result<(), String>, LoadMarker> + 'static,
     ) -> &mut Self;
+
+    /// Registers a check the `expect` command can run by `name`.
+    ///
+    /// The system receives the command's `args` as `In<Value>` (`null` when absent) and returns
+    /// the value it read, or an error message when the check fails by itself. Registering a name
+    /// twice replaces the first check. Works before or after adding [`InputDriverPlugin`].
+    ///
+    /// [`InputDriverPlugin`]: crate::InputDriverPlugin
+    fn add_driver_check<M>(
+        &mut self,
+        name: impl Into<String>,
+        check_system: impl IntoSystem<In<Value>, Result<Value, String>, M> + 'static,
+    ) -> &mut Self;
+
+    /// Registers a BRP method served next to the `drive/*` methods, such as `game/score`.
+    ///
+    /// The handler receives the request params. Works before or after adding
+    /// [`InputDriverPlugin`]. The methods are served only while a `RemotePlugin` exists: the
+    /// driver's, when `enable_remote` is true, or one the game adds itself when it is false.
+    ///
+    /// [`InputDriverPlugin`]: crate::InputDriverPlugin
+    fn add_driver_remote_method<M>(
+        &mut self,
+        name: impl Into<String>,
+        handler: impl IntoSystem<In<Option<Value>>, BrpResult, M> + 'static,
+    ) -> &mut Self;
 }
 
 impl InputDriverAppExt for App {
+    fn add_driver_check<M>(
+        &mut self,
+        name: impl Into<String>,
+        check_system: impl IntoSystem<In<Value>, Result<Value, String>, M> + 'static,
+    ) -> &mut Self {
+        register_driver_check(self, name.into(), check_system);
+        self
+    }
+
+    fn add_driver_remote_method<M>(
+        &mut self,
+        name: impl Into<String>,
+        handler: impl IntoSystem<In<Option<Value>>, BrpResult, M> + 'static,
+    ) -> &mut Self {
+        register_remote_method(self, name.into(), handler);
+        self
+    }
+
     fn set_driver_state_handlers<SaveMarker, LoadMarker>(
         &mut self,
         save_system: impl IntoSystem<In<PathBuf>, Result<(), String>, SaveMarker> + 'static,

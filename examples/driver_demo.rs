@@ -11,9 +11,11 @@ use bevy::{
         touch::Touches,
     },
     prelude::*,
+    remote::BrpResult,
     window::{PrimaryWindow, WindowResolution},
 };
 use bevy_input_driver::{DriverSeed, InputDriverAppExt, InputDriverPlugin};
+use serde_json::{Value, json};
 
 const DARK_BLUE: Color = Color::srgb(0.05, 0.1, 0.45);
 const BRIGHT_GREEN: Color = Color::srgb(0.1, 0.95, 0.2);
@@ -54,7 +56,7 @@ struct InputTotals {
     double_taps: u32,
 }
 
-fn main() {
+fn main() -> AppExit {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -67,6 +69,9 @@ fn main() {
         }))
         .add_plugins(InputDriverPlugin::default())
         .set_driver_state_handlers(save_demo_state, load_demo_state)
+        .add_driver_check("button_is_green", button_is_green)
+        .add_driver_check("square_top_left", square_top_left)
+        .add_driver_remote_method("demo/typed_text", typed_text_method)
         .insert_resource(ClearColor(Color::srgb(0.15, 0.15, 0.15)))
         .init_resource::<TypedText>()
         .init_resource::<InputTotals>()
@@ -93,7 +98,7 @@ fn main() {
                 show_status,
             ),
         )
-        .run();
+        .run()
 }
 
 fn absolute_node(left: f32, top: f32, width: f32, height: f32) -> Node {
@@ -243,6 +248,21 @@ fn show_status(
         virtual_time.is_paused(),
         virtual_time.elapsed_secs(),
     );
+}
+
+fn button_is_green(In(_args): In<Value>, button: Single<&ToggleButton>) -> Result<Value, String> {
+    Ok(Value::Bool(button.is_green))
+}
+
+fn square_top_left(
+    In(_args): In<Value>,
+    square: Single<&DraggableSquare>,
+) -> Result<Value, String> {
+    Ok(json!([square.top_left.x, square.top_left.y]))
+}
+
+fn typed_text_method(In(_params): In<Option<Value>>, typed: Res<TypedText>) -> BrpResult {
+    Ok(Value::String(typed.0.clone()))
 }
 
 fn save_demo_state(

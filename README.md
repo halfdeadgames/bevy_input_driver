@@ -51,7 +51,8 @@ One JSON object per command, tagged by `cmd`. Positions are logical pixels in th
 | `screenshot` | `{"cmd":"screenshot","path":"shots/start.png"}` |
 | `window_minimize` / `window_restore` | `{"cmd":"window_minimize"}` (see [Minimized windows](#minimized-windows)) |
 | `release_all` | `{"cmd":"release_all"}` |
-| `quit` | `{"cmd":"quit"}` |
+| `quit` | `{"cmd":"quit"}` (exit code 1 if any `expect` check failed, otherwise 0) |
+| `expect` | `{"cmd":"expect","check":"score","args":{"player":1},"equals":5}` (runs your registered check; `args` and `equals` are optional; see [Checks](#checks)) |
 | `set_seed` | `{"cmd":"set_seed","seed":42}` (sets `DriverSeed`) |
 | `time_pause` / `time_resume` | `{"cmd":"time_pause"}` (pauses or resumes `Time<Virtual>`) |
 | `time_speed` | `{"cmd":"time_speed","factor":0.5}` (factor must be finite and above 0) |
@@ -66,7 +67,7 @@ Every command is visible to game systems for at least one frame of its own. `key
 
 ## Live use over BRP
 
-BRP methods: `drive/send` (one command object or an array; all are parsed before any is queued), `drive/status`, and `drive/clear` (empties the queue and releases everything the driver holds). `drive/status` reports `frame_count`, `queue_length`, `idle`, `cursor_position`, `held_keys`, `held_buttons`, `held_touches`, `pending_screenshots`, `screenshots_saved`, `errors` (last 50), and `script_loaded`, `seed`, `paused`, `speed`, `fixed_step_ms` (null under real time), `virtual_elapsed_seconds`, `state_operations` (last 50 entries such as `saved saves/slot1.txt`), `render_ready`, `pipelines_pending`, `failed_pipelines` (each entry has `label`, `shader_paths`, and `error`), `render_frame_count` (runs of Bevy's `Render` schedule, or null without a renderer), `window_size` (the primary window's `[width, height]` in physical pixels, or null without a primary window), `window_minimized`, and `window_os_minimized` (see [Minimized windows](#minimized-windows)). The time, render, and window fields are refreshed once per frame, and `speed` reads 0 until the first frame finishes. `render_frame_count` usually runs 1 or 2 behind `frame_count`, because a frame is drawn while the next one runs. It counts render runs, not frames shown on screen, so it keeps rising in a minimized window.
+BRP methods: `drive/send` (one command object or an array; all are parsed before any is queued), `drive/status`, and `drive/clear` (empties the queue and releases everything the driver holds). `drive/status` reports `frame_count`, `queue_length`, `idle`, `cursor_position`, `held_keys`, `held_buttons`, `held_touches`, `pending_screenshots`, `screenshots_saved`, `errors` (last 50), and `script_loaded`, `seed`, `paused`, `speed`, `fixed_step_ms` (null under real time), `virtual_elapsed_seconds`, `state_operations` (last 50 entries such as `saved saves/slot1.txt`), `checks` (last 50 check results), `checks_failed` (every failed check since launch), `render_ready`, `pipelines_pending`, `failed_pipelines` (each entry has `label`, `shader_paths`, and `error`), `render_frame_count` (runs of Bevy's `Render` schedule, or null without a renderer), `window_size` (the primary window's `[width, height]` in physical pixels, or null without a primary window), `window_minimized`, and `window_os_minimized` (see [Minimized windows](#minimized-windows)). The time, render, and window fields are refreshed once per frame, and `speed` reads 0 until the first frame finishes. `render_frame_count` usually runs 1 or 2 behind `frame_count`, because a frame is drawn while the next one runs. It counts render runs, not frames shown on screen, so it keeps rising in a minimized window.
 
 The helper `tools/drive.py` needs only Python 3:
 
@@ -90,6 +91,8 @@ cargo run -- --input-script tests/smoke.jsonl
 ```
 
 `--input-script` overrides `InputDriverPlugin::script_path`.
+
+A script with `expect` lines and a final `quit` is a self-checking test: the process exits with code 1 if any check failed, so a test runner only needs the exit code. Try `cargo run --example driver_demo -- --input-script scripts/demo_checks.jsonl` (exits 0) and `scripts/demo_checks_fail.jsonl` (exits 1).
 
 ## Waiting for the first drawn frame
 
@@ -154,12 +157,53 @@ fn save_game_state(In(path): In<PathBuf>, player: Single<&Transform, With<Player
 
 `save_state` and `load_state` run the matching hook, then end the frame so the game sees the loaded state on the next frame. Success adds an entry such as `loaded saves/slot1.txt` to `state_operations`. A failure, or calling either command with no hooks registered ("no save system registered: call set_driver_state_handlers"), is recorded in `errors` with the command and path in front, and the queue continues.
 
+## Checks
+
+A check reads a value from the game. Register it by name as a one-shot system that takes the command's `args` as `In<serde_json::Value>` (null when `args` is left out) and returns the value it read, or an error message:
+
+```rust
+use bevy_input_driver::InputDriverAppExt;
+use serde_json::{Value, json};
+
+app.add_driver_check("score", read_score);
+
+fn read_score(In(_args): In<Value>, score: Res<Score>) -> Result<Value, String> {
+    Ok(json!(score.0))
+}
+```
+
+The game needs its own `serde_json = "1"` dependency for `Value` and `json!`. `BrpResult` (below) is `bevy::remote::BrpResult`.
+
+`expect` ends the current frame, then runs the check at the start of the next one, so the check sees how the game reacted to every command before it. The check fails when:
+
+- it returns an error,
+- `equals` is given and does not match the returned value (numbers match by value, so `5` equals `5.0`, at any depth inside arrays and objects; everything else must match exactly), or
+- no check has that name (the message lists the registered names).
+
+Each result is added to `checks` in `drive/status` with `check`, `passed`, `value` (the value the check returned, if any), and `message` (why it failed, such as `expected 5, got 3`). A failure is also recorded in `errors` as `expect <name>: <message>`, adds 1 to `checks_failed`, and the queue continues, so one run reports every failure. `drive/clear` does not reset `checks_failed`.
+
+`quit` exits with code 1 if `checks_failed` is above 0. The exit code reaches the operating system only if `main` returns the `AppExit` from `App::run()`: write `fn main() -> AppExit { App::new() ... .run() }`.
+
+## Game BRP methods
+
+Because the driver owns `RemotePlugin`, add your own BRP methods through the driver:
+
+```rust
+app.add_driver_remote_method("game/score", read_score_method);
+
+fn read_score_method(In(_params): In<Option<Value>>, score: Res<Score>) -> BrpResult {
+    Ok(json!(score.0))
+}
+```
+
+You can call `add_driver_remote_method` before or after adding `InputDriverPlugin`. With `enable_remote` set to false the methods are served only if the game adds its own `RemotePlugin`. A name that is already taken, built-in or not, is replaced.
+
 ## Gotchas
 
 - `wait_seconds` uses wall-clock time, so it keeps counting while virtual time is paused. `wait_frames` counts rendered frames and also keeps running.
 - `Time<Virtual>` clamps each frame's advance to its max delta (250 ms by default). A `time_fixed_step` above that raises the max delta to the step, and `time_real` restores 250 ms.
 - Keep your real mouse and keyboard off the game window during tests. Real input mixes with injected input.
-- Only one `RemotePlugin` may exist. The driver adds it when `enable_remote` is true.
+- Only one `RemotePlugin` may exist. The driver adds it when `enable_remote` is true. Add your own methods with `add_driver_remote_method`.
 - Screenshot paths are relative to the process working directory. Parent folders are created. Use a `.png` extension, since the format follows the extension.
 - The `drive/*` methods run in `Update`, so a paused or unfocused game that stops updating also stops the driver.
 - Commands with no primary window are skipped and an error is recorded.

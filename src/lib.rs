@@ -7,9 +7,17 @@
 //! from real input.
 //!
 //! Add [`InputDriverPlugin`] to the app, typically behind a cargo feature.
+//!
+//! A game can make a launch script check itself. Register a check with
+//! [`InputDriverAppExt::add_driver_check`], then write `{"cmd":"expect","check":"name",
+//! "args":<optional>,"equals":<optional>}` in the script or in `drive/send`. Each result lands in
+//! the `checks` list of `drive/status`, every failure also adds an entry to `errors` and counts
+//! in `checks_failed`, and a `quit` exits with code 1 when `checks_failed` is above 0.
+//! [`InputDriverAppExt::add_driver_remote_method`] adds the game's own BRP methods.
 
 #![warn(missing_docs)]
 
+pub mod checks;
 pub mod commands;
 pub mod executor;
 pub mod injection;
@@ -25,6 +33,7 @@ pub mod steps;
 pub mod time_control;
 pub mod window_control;
 
+pub use checks::{CheckResult, DriverChecks};
 pub use commands::{CommandParseError, DriverCommand};
 pub use plugin::InputDriverPlugin;
 pub use render_readiness::{FailedPipeline, RenderReadiness};

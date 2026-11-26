@@ -13,6 +13,7 @@ use bevy::{
     math::Vec2,
     prelude::Resource,
 };
+use serde_json::Value;
 
 use crate::{
     commands::{DriverCommand, ScrollUnit, TouchCommandPhase},
@@ -174,6 +175,15 @@ pub enum DriverStep {
         operation: StateOperation,
         /// File path handed to the hook.
         path: String,
+    },
+    /// Run a registered check and record the result.
+    Check {
+        /// Name the check was registered under.
+        check: String,
+        /// Input handed to the check.
+        args: Value,
+        /// Value the check must return, if any.
+        equals: Option<Value>,
     },
     /// Stop executing until the next frame so game systems see the steps so far.
     EndFrame,
@@ -388,6 +398,19 @@ pub fn expand_command(command: &DriverCommand) -> Vec<DriverStep> {
         ],
         DriverCommand::SaveState { path } => state_steps(StateOperation::Save, path),
         DriverCommand::LoadState { path } => state_steps(StateOperation::Load, path),
+        // The barrier first lets game systems react to every earlier input before the check reads.
+        DriverCommand::Expect {
+            check,
+            args,
+            equals,
+        } => vec![
+            DriverStep::EndFrame,
+            DriverStep::Check {
+                check: check.clone(),
+                args: args.clone().unwrap_or_default(),
+                equals: equals.clone(),
+            },
+        ],
     }
 }
 
@@ -722,6 +745,21 @@ mod tests {
                     path: "slot.txt".to_owned()
                 },
                 DriverStep::EndFrame
+            ]
+        );
+    }
+
+    #[test]
+    fn expect_ends_the_frame_before_the_check() {
+        assert_eq!(
+            expand(r#"{"cmd":"expect","check":"hp","equals":3}"#),
+            vec![
+                DriverStep::EndFrame,
+                DriverStep::Check {
+                    check: "hp".to_owned(),
+                    args: Value::Null,
+                    equals: Some(Value::from(3)),
+                }
             ]
         );
     }
