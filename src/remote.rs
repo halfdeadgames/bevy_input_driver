@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 
 use crate::{
     commands::{DriverCommand, parse_command_value},
+    real_input::RealInputBlocking,
     status::DriverStatus,
     steps::DriverQueue,
 };
@@ -167,9 +168,13 @@ fn status_json(status: &DriverStatus) -> BrpResult {
 fn send_commands_method(
     In(params): In<Option<Value>>,
     mut queue: ResMut<DriverQueue>,
+    mut blocking: ResMut<RealInputBlocking>,
 ) -> BrpResult {
     let commands = parse_send_params(params)?;
     queue.enqueue_commands(&commands);
+    if !commands.is_empty() {
+        blocking.block_for_first_command();
+    }
     Ok(json!({ "queued": commands.len(), "queue_length": queue.step_count() }))
 }
 
@@ -177,8 +182,10 @@ fn status_method(
     In(_params): In<Option<Value>>,
     mut status: ResMut<DriverStatus>,
     queue: Res<DriverQueue>,
+    blocking: Res<RealInputBlocking>,
 ) -> BrpResult {
     status.synchronize_with_queue(&queue);
+    status.real_input_blocked = blocking.is_blocked();
     status_json(&status)
 }
 
@@ -186,9 +193,11 @@ fn clear_method(
     In(_params): In<Option<Value>>,
     mut status: ResMut<DriverStatus>,
     mut queue: ResMut<DriverQueue>,
+    blocking: Res<RealInputBlocking>,
 ) -> BrpResult {
     queue.clear_and_release_all();
     status.synchronize_with_queue(&queue);
+    status.real_input_blocked = blocking.is_blocked();
     status_json(&status)
 }
 
@@ -277,6 +286,37 @@ mod tests {
         let methods = app.world().resource::<RemoteMethods>();
         assert_eq!(instant_id(methods, SEND_METHOD), driver_id);
         assert!(methods.get("drive/other").is_none());
+    }
+
+    fn send_through_a_world(world: &mut World, params: Value) {
+        world
+            .run_system_cached_with(send_commands_method, Some(params))
+            .expect("system should run")
+            .expect("commands should be accepted");
+    }
+
+    #[test]
+    fn the_first_live_command_turns_real_input_blocking_on() {
+        let mut world = World::new();
+        world.init_resource::<DriverQueue>();
+        world.init_resource::<RealInputBlocking>();
+        assert!(!world.resource::<RealInputBlocking>().is_blocked());
+
+        send_through_a_world(&mut world, json!({"cmd": "release_all"}));
+        assert!(world.resource::<RealInputBlocking>().is_blocked());
+
+        world.resource_mut::<RealInputBlocking>().set_blocked(false);
+        send_through_a_world(&mut world, json!([{"cmd": "release_all"}]));
+        assert!(!world.resource::<RealInputBlocking>().is_blocked());
+    }
+
+    #[test]
+    fn an_empty_batch_does_not_turn_blocking_on() {
+        let mut world = World::new();
+        world.init_resource::<DriverQueue>();
+        world.init_resource::<RealInputBlocking>();
+        send_through_a_world(&mut world, json!([]));
+        assert!(!world.resource::<RealInputBlocking>().is_blocked());
     }
 
     #[test]

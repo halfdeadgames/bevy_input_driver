@@ -161,6 +161,11 @@ pub enum DriverStep {
     },
     /// Ask for the primary window to be minimized or restored.
     Window(WindowAction),
+    /// Block or allow real input.
+    RealInput {
+        /// True to block real input.
+        blocked: bool,
+    },
     /// Release everything the driver holds.
     ReleaseAll,
     /// Exit the app.
@@ -377,6 +382,9 @@ pub fn expand_command(command: &DriverCommand) -> Vec<DriverStep> {
         }
         DriverCommand::WindowRestore {} => {
             then_end_frame(DriverStep::Window(WindowAction::Restore))
+        }
+        DriverCommand::RealInput { blocked } => {
+            then_end_frame(DriverStep::RealInput { blocked: *blocked })
         }
         DriverCommand::ReleaseAll {} => then_end_frame(DriverStep::ReleaseAll),
         DriverCommand::Quit {} => then_end_frame(DriverStep::Quit),
@@ -777,6 +785,17 @@ mod tests {
             expand(r#"{"cmd":"window_restore"}"#),
             vec![
                 DriverStep::Window(WindowAction::Restore),
+                DriverStep::EndFrame
+            ]
+        );
+    }
+
+    #[test]
+    fn real_input_ends_with_a_barrier() {
+        assert_eq!(
+            expand(r#"{"cmd":"real_input","blocked":false}"#),
+            vec![
+                DriverStep::RealInput { blocked: false },
                 DriverStep::EndFrame
             ]
         );

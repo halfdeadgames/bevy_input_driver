@@ -234,6 +234,11 @@ pub enum DriverCommand {
     /// Ask Bevy to restore the primary window from minimized. Only requests the change; use
     /// `wait_frames` and read `window_minimized` in `drive/status` to see it happen.
     WindowRestore {},
+    /// Block or allow real keyboard and pointer input while the driver is in control.
+    RealInput {
+        /// True to block real input, false to let it through.
+        blocked: bool,
+    },
     /// Release every key and button the driver holds.
     ReleaseAll {},
     /// Exit the app: `AppExit::Success`, or `AppExit::error()` (code 1) when any `expect` failed.
@@ -586,6 +591,21 @@ mod tests {
         );
         assert!(parse_command_text(r#"{"cmd":"window_minimize","extra":1}"#).is_err());
         assert!(parse_command_text(r#"{"cmd":"window_restore","extra":1}"#).is_err());
+    }
+
+    #[test]
+    fn parses_real_input_with_a_required_flag() {
+        assert_eq!(
+            parse(r#"{"cmd":"real_input","blocked":false}"#),
+            DriverCommand::RealInput { blocked: false }
+        );
+        assert_eq!(
+            parse(r#"{"cmd":"real_input","blocked":true}"#),
+            DriverCommand::RealInput { blocked: true }
+        );
+        assert!(parse_command_text(r#"{"cmd":"real_input"}"#).is_err());
+        assert!(parse_command_text(r#"{"cmd":"real_input","blocked":"yes"}"#).is_err());
+        assert!(parse_command_text(r#"{"cmd":"real_input","blocked":true,"extra":1}"#).is_err());
     }
 
     #[test]

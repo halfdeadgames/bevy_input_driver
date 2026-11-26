@@ -10,6 +10,7 @@ use bevy::{log::info, prelude::*};
 use crate::{
     commands::{CommandParseError, DriverCommand, parse_command_text},
     plugin::DriverSettings,
+    real_input::RealInputBlocking,
     status::DriverStatus,
     steps::DriverQueue,
 };
@@ -119,11 +120,13 @@ fn load_script_commands(path: &Path) -> Result<Vec<DriverCommand>, ScriptFileErr
 /// Startup system: loads the launch script, if one is named, and queues its commands.
 ///
 /// The `--input-script` process argument overrides the path set on the plugin. On any error
-/// nothing is queued and the error is recorded in [`DriverStatus::errors`].
+/// nothing is queued and the error is recorded in [`DriverStatus::errors`]. A loaded script also
+/// starts blocking real input.
 pub fn load_script_file(
     settings: Res<DriverSettings>,
     mut queue: ResMut<DriverQueue>,
     mut status: ResMut<DriverStatus>,
+    mut blocking: ResMut<RealInputBlocking>,
 ) {
     let from_arguments = match script_path_from_arguments(std::env::args().skip(1)) {
         Ok(path) => path,
@@ -138,6 +141,7 @@ pub fn load_script_file(
     match load_script_commands(&path) {
         Ok(commands) => {
             queue.enqueue_commands(&commands);
+            blocking.block_for_first_command();
             status.script_loaded = Some(path.display().to_string());
         }
         Err(problem) => status.record_error(problem.to_string()),

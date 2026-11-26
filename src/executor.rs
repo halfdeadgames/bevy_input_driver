@@ -14,6 +14,7 @@ use crate::{
     checks::{queue_check, queue_quit},
     injection::{InjectionError, InputInjector},
     plugin::DriverSettings,
+    real_input::RealInputBlocking,
     render_readiness::RenderReadiness,
     screenshot::request_screenshot,
     seed::queue_set_seed,
@@ -69,6 +70,7 @@ pub fn execute_driver_steps(
     mut status: ResMut<DriverStatus>,
     settings: Res<DriverSettings>,
     readiness: Option<Res<RenderReadiness>>,
+    mut blocking: ResMut<RealInputBlocking>,
     mut injector: InputInjector,
     mut commands: Commands,
 ) {
@@ -133,6 +135,7 @@ pub fn execute_driver_steps(
                         &mut injector,
                         &mut status,
                         &mut commands,
+                        &mut blocking,
                         settings.update_window_cursor_position,
                     ) {
                         status.record_error(problem.to_string());
@@ -174,6 +177,7 @@ fn apply_step(
     injector: &mut InputInjector,
     status: &mut DriverStatus,
     commands: &mut Commands,
+    blocking: &mut RealInputBlocking,
     update_window_cursor_position: bool,
 ) -> Result<(), InjectionError> {
     match step {
@@ -212,6 +216,7 @@ fn apply_step(
         DriverStep::DoubleTap => injector.double_tap(),
         DriverStep::Screenshot { path } => request_screenshot(commands, status, path.clone()),
         DriverStep::Window(action) => queue_window_action(commands, *action),
+        DriverStep::RealInput { blocked } => blocking.set_blocked(*blocked),
         DriverStep::ReleaseAll => release_everything_held(injector, status)?,
         DriverStep::Quit => queue_quit(commands),
         DriverStep::Check {

@@ -50,6 +50,7 @@ One JSON object per command, tagged by `cmd`. Positions are logical pixels in th
 | `wait_until_drawn` | `{"cmd":"wait_until_drawn","timeout_seconds":60,"settle_frames":3}` (waits until the shaders in use have compiled; see below; timeout default 60, above 0 and at most 3600; `settle_frames` default 3, from 1 to 600) |
 | `screenshot` | `{"cmd":"screenshot","path":"shots/start.png"}` |
 | `window_minimize` / `window_restore` | `{"cmd":"window_minimize"}` (see [Minimized windows](#minimized-windows)) |
+| `real_input` | `{"cmd":"real_input","blocked":false}` (`blocked` is required; see [Blocking real input](#blocking-real-input)) |
 | `release_all` | `{"cmd":"release_all"}` |
 | `quit` | `{"cmd":"quit"}` (exit code 1 if any `expect` check failed, otherwise 0) |
 | `expect` | `{"cmd":"expect","check":"score","args":{"player":1},"equals":5}` (runs your registered check; `args` and `equals` are optional; see [Checks](#checks)) |
@@ -67,7 +68,7 @@ Every command is visible to game systems for at least one frame of its own. `key
 
 ## Live use over BRP
 
-BRP methods: `drive/send` (one command object or an array; all are parsed before any is queued), `drive/status`, and `drive/clear` (empties the queue and releases everything the driver holds). `drive/status` reports `frame_count`, `queue_length`, `idle`, `cursor_position`, `held_keys`, `held_buttons`, `held_touches`, `pending_screenshots`, `screenshots_saved`, `errors` (last 50), and `script_loaded`, `seed`, `paused`, `speed`, `fixed_step_ms` (null under real time), `virtual_elapsed_seconds`, `state_operations` (last 50 entries such as `saved saves/slot1.txt`), `checks` (last 50 check results), `checks_failed` (every failed check since launch), `render_ready`, `pipelines_pending`, `failed_pipelines` (each entry has `label`, `shader_paths`, and `error`), `render_frame_count` (runs of Bevy's `Render` schedule, or null without a renderer), `window_size` (the primary window's `[width, height]` in physical pixels, or null without a primary window), `window_minimized`, and `window_os_minimized` (see [Minimized windows](#minimized-windows)). The time, render, and window fields are refreshed once per frame, and `speed` reads 0 until the first frame finishes. `render_frame_count` usually runs 1 or 2 behind `frame_count`, because a frame is drawn while the next one runs. It counts render runs, not frames shown on screen, so it keeps rising in a minimized window.
+BRP methods: `drive/send` (one command object or an array; all are parsed before any is queued), `drive/status`, and `drive/clear` (empties the queue and releases everything the driver holds). `drive/status` reports `frame_count`, `queue_length`, `idle`, `cursor_position`, `held_keys`, `held_buttons`, `held_touches`, `pending_screenshots`, `screenshots_saved`, `errors` (last 50), and `script_loaded`, `seed`, `paused`, `speed`, `fixed_step_ms` (null under real time), `virtual_elapsed_seconds`, `state_operations` (last 50 entries such as `saved saves/slot1.txt`), `checks` (last 50 check results), `checks_failed` (every failed check since launch), `render_ready`, `pipelines_pending`, `failed_pipelines` (each entry has `label`, `shader_paths`, and `error`), `render_frame_count` (runs of Bevy's `Render` schedule, or null without a renderer), `window_size` (the primary window's `[width, height]` in physical pixels, or null without a primary window), `window_minimized`, `window_os_minimized` (see [Minimized windows](#minimized-windows)), and `real_input_blocked` (see [Blocking real input](#blocking-real-input)). The time, render, and window fields are refreshed once per frame, and `speed` reads 0 until the first frame finishes. `render_frame_count` usually runs 1 or 2 behind `frame_count`, because a frame is drawn while the next one runs. It counts render runs, not frames shown on screen, so it keeps rising in a minimized window.
 
 The helper `tools/drive.py` needs only Python 3:
 
@@ -93,6 +94,21 @@ cargo run -- --input-script tests/smoke.jsonl
 `--input-script` overrides `InputDriverPlugin::script_path`.
 
 A script with `expect` lines and a final `quit` is a self-checking test: the process exits with code 1 if any check failed, so a test runner only needs the exit code. Try `cargo run --example driver_demo -- --input-script scripts/demo_checks.jsonl` (exits 0) and `scripts/demo_checks_fail.jsonl` (exits 1).
+
+## Blocking real input
+
+A real mouse resting over a newly shown window sends cursor positions that mix with injected ones, so the driver blocks real input while it is in control.
+
+- Blocking starts when a launch script loads, or when the first live command arrives through `drive/send`. It lasts until the game exits or `{"cmd":"real_input","blocked":false}` turns it off. `{"cmd":"real_input","blocked":true}` turns it back on. After you send `real_input`, later live commands do not change the setting. `drive/status` reports the state as `real_input_blocked`, and one info line is logged each time it changes.
+- Mouse: while blocked, the primary window's `CursorOptions::hit_test` is false, so on Windows the real pointer passes through the window to whatever is below. It is written only when the state changes. The driver never writes `Window::cursor_position`.
+- Keyboard and pointer messages: while blocked, the driver empties the typed `KeyboardInput`, `MouseButtonInput`, `MouseWheel`, `CursorMoved`, `MouseMotion`, `TouchInput`, and gesture message queues at the start of every frame (in `First`, after Bevy swaps the message buffers). Real input is written before that point and injected input in `PreUpdate`, so only real input is dropped. This holds even when the window has focus. Real `KeyboardFocusLost` is kept.
+- Known limits: `Messages<WindowEvent>` is not cleared, because `bevy_picking` reads the injected pointer window events a frame late. A real key press can therefore still show up inside `WindowEvent::KeyboardInput` for a system that reads raw `WindowEvent`s. A game system that reads these typed messages in `FixedUpdate` can miss an injected message in a frame where no fixed step ran, because the next frame's clearing removes it before the step. Read state from `ButtonInput` or read in `Update` instead.
+
+## Off-screen start
+
+When a script path is given (`--input-script` or `InputDriverPlugin::script_path`) and the process arguments do not contain `--on-screen`, the driver places the primary window at (-30000, -30000), far off every monitor, and sets `Window::focused` to false so it does not steal focus. This happens before the operating system window exists, so it never flashes on screen. The window is not minimized, because a minimized window has no surface and screenshots are skipped. Set `InputDriverPlugin::off_screen_for_scripts` to false (default true) to turn this off in code. The setting is also stored in `DriverSettings`.
+
+An unfocused window runs under Bevy's default `WinitSettings::game()` unfocused mode: reactive low power, at most 60 frames per second. For performance tests, run on-screen and focused: pass `--on-screen` (the window then takes focus as usual), or run without a script.
 
 ## Waiting for the first drawn frame
 
@@ -204,7 +220,7 @@ You can call `add_driver_remote_method` before or after adding `InputDriverPlugi
 
 - `wait_seconds` uses wall-clock time, so it keeps counting while virtual time is paused. `wait_frames` counts rendered frames and also keeps running.
 - `Time<Virtual>` clamps each frame's advance to its max delta (250 ms by default). A `time_fixed_step` above that raises the max delta to the step, and `time_real` restores 250 ms.
-- Keep your real mouse and keyboard off the game window during tests. Real input mixes with injected input.
+- Real input is blocked once a script loads or a live command arrives (see [Blocking real input](#blocking-real-input)), so it does not mix with injected input. Send `real_input` with `blocked` set to false to play by hand.
 - Only one `RemotePlugin` may exist. The driver adds it when `enable_remote` is true. Add your own methods with `add_driver_remote_method`.
 - Screenshot paths are relative to the process working directory. Parent folders are created. Use a `.png` extension, since the format follows the extension.
 - The `drive/*` methods run in `Update`, so a paused or unfocused game that stops updating also stops the driver.

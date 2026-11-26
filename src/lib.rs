@@ -22,6 +22,7 @@ pub mod commands;
 pub mod executor;
 pub mod injection;
 pub mod plugin;
+pub mod real_input;
 pub mod remote;
 pub mod render_readiness;
 pub mod screenshot;

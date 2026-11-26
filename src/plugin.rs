@@ -7,6 +7,7 @@ use bevy::{prelude::*, remote::http::DEFAULT_PORT};
 use crate::{
     checks::DriverChecksPlugin,
     executor::DriverExecutorPlugin,
+    real_input::{DriverRealInputPlugin, place_window_off_screen_for_scripts},
     remote::DriverRemotePlugin,
     render_readiness::DriverRenderReadinessPlugin,
     script_file::{load_script_file, log_driver_startup},
@@ -26,6 +27,8 @@ pub struct DriverSettings {
     pub script_path: Option<PathBuf>,
     /// Whether injected cursor moves also write `Window::cursor_position`.
     pub update_window_cursor_position: bool,
+    /// Whether a script run starts with the primary window off every monitor.
+    pub off_screen_for_scripts: bool,
 }
 
 /// Lets an automated tester inject input and take screenshots in a running game.
@@ -51,6 +54,10 @@ pub struct InputDriverPlugin {
     /// a private cache, so any later change to the `Window` (a title, a cursor icon) warps the
     /// user's real OS cursor to the injected position. Turn it on only for unattended runs.
     pub update_window_cursor_position: bool,
+    /// When a script is given (`--input-script` or [`InputDriverPlugin::script_path`]) and the
+    /// process arguments lack `--on-screen`, start the primary window far off every monitor and
+    /// unfocused, so it neither covers the user's screen nor steals focus. Defaults to true.
+    pub off_screen_for_scripts: bool,
 }
 
 impl Default for InputDriverPlugin {
@@ -61,6 +68,7 @@ impl Default for InputDriverPlugin {
             enable_remote: true,
             seed: None,
             update_window_cursor_position: false,
+            off_screen_for_scripts: true,
         }
     }
 }
@@ -72,8 +80,10 @@ impl Plugin for InputDriverPlugin {
             enable_remote: self.enable_remote,
             script_path: self.script_path.clone(),
             update_window_cursor_position: self.update_window_cursor_position,
+            off_screen_for_scripts: self.off_screen_for_scripts,
         })
         .add_plugins((
+            DriverRealInputPlugin,
             DriverExecutorPlugin,
             DriverSeedPlugin { seed: self.seed },
             DriverTimeControlPlugin,
@@ -86,5 +96,15 @@ impl Plugin for InputDriverPlugin {
         if self.enable_remote {
             app.add_plugins(DriverRemotePlugin { port: self.port });
         }
+    }
+
+    // After every plugin was built, so the primary window exists, and before the runner creates
+    // the operating system window, so it never shows on screen first.
+    fn finish(&self, app: &mut App) {
+        place_window_off_screen_for_scripts(
+            app.world_mut(),
+            self.off_screen_for_scripts,
+            self.script_path.as_deref(),
+        );
     }
 }

@@ -91,6 +91,9 @@ pub struct DriverStatus {
     /// when it cannot tell (Wayland, iOS, Android, the web, a game without winit, or no primary
     /// window). Refreshed once per frame.
     pub window_os_minimized: Option<bool>,
+    /// True while real keyboard and pointer input is blocked. Starts when a launch script loads
+    /// or the first live command arrives, and ends with a `real_input` command.
+    pub real_input_blocked: bool,
     /// The most recent 50 `expect` results, oldest first.
     pub checks: Vec<CheckResult>,
     /// Failed `expect` commands over the whole process. Never capped, and `drive/clear` does not
