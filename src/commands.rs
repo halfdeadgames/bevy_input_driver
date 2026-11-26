@@ -283,10 +283,18 @@ pub enum DriverCommand {
         #[serde(default)]
         args: Option<Value>,
         /// Value the check must return. Numbers compare by numeric value, everything else
-        /// exactly. Without it, any returned value passes.
-        #[serde(default)]
+        /// exactly. An explicit `null` expects null. Without it, any returned value passes.
+        #[serde(default, deserialize_with = "deserialize_present_value")]
         equals: Option<Value>,
     },
+}
+
+// Plain `Option<Value>` turns a present `null` into `None`; a present field must stay `Some`.
+fn deserialize_present_value<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
 }
 
 /// Why a command could not be parsed.
@@ -645,6 +653,22 @@ mod tests {
                 check: "flag".to_owned(),
                 args: None,
                 equals: Some(Value::Bool(false))
+            }
+        );
+        assert_eq!(
+            parse(r#"{"cmd":"expect","check":"flag","equals":null}"#),
+            DriverCommand::Expect {
+                check: "flag".to_owned(),
+                args: None,
+                equals: Some(Value::Null)
+            }
+        );
+        assert_eq!(
+            parse(r#"{"cmd":"expect","check":"flag","equals":5}"#),
+            DriverCommand::Expect {
+                check: "flag".to_owned(),
+                args: None,
+                equals: Some(serde_json::json!(5))
             }
         );
         assert!(parse_command_text(r#"{"cmd":"expect"}"#).is_err());

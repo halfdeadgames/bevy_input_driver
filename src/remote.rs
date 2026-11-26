@@ -33,33 +33,75 @@ pub struct PendingRemoteMethods {
 }
 
 /// Registers the handler as the BRP method `name`, now if `RemoteMethods` exists, else when
-/// [`DriverRemotePlugin`] builds.
+/// [`DriverRemotePlugin`] builds or, at the latest, in `Startup`.
+///
+/// Names starting with `drive/` belong to the driver: they are refused with an error log and
+/// nothing is registered.
 pub fn register_remote_method<Marker>(
     app: &mut App,
     name: String,
     handler: impl IntoSystem<In<Option<Value>>, BrpResult, Marker> + 'static,
 ) {
+    if name.starts_with(RESERVED_PREFIX) {
+        error!(
+            "input driver: refused game remote method \"{name}\": names starting with \
+             \"{RESERVED_PREFIX}\" are reserved for the driver"
+        );
+        return;
+    }
     let system = app.register_system(handler);
-    match app.world_mut().get_resource_mut::<RemoteMethods>() {
-        Some(mut methods) => {
-            methods.insert(name, RemoteMethodSystemId::Instant(system));
-        }
-        None => app
-            .world_mut()
-            .get_resource_or_insert_with(PendingRemoteMethods::default)
-            .methods
-            .push((name, system)),
+    if let Some(mut methods) = app.world_mut().get_resource_mut::<RemoteMethods>() {
+        insert_game_method(&mut methods, name, system);
+        return;
+    }
+    if !app.world().contains_resource::<PendingRemoteMethods>() {
+        app.init_resource::<PendingRemoteMethods>()
+            .add_systems(Startup, drain_pending_methods_at_startup);
+    }
+    app.world_mut()
+        .resource_mut::<PendingRemoteMethods>()
+        .methods
+        .push((name, system));
+}
+
+const RESERVED_PREFIX: &str = "drive/";
+
+fn insert_game_method(methods: &mut RemoteMethods, name: String, system: RemoteMethodSystem) {
+    let replaced = methods.insert(name.clone(), RemoteMethodSystemId::Instant(system));
+    if replaced.is_some() {
+        warn!("input driver: game remote method \"{name}\" replaced an existing method");
     }
 }
 
-fn drain_pending_remote_methods(app: &mut App) {
-    let Some(pending) = app.world_mut().remove_resource::<PendingRemoteMethods>() else {
+fn drain_pending_remote_methods(world: &mut World) {
+    if !world.contains_resource::<RemoteMethods>() {
+        return;
+    }
+    let Some(pending) = world.remove_resource::<PendingRemoteMethods>() else {
         return;
     };
-    let mut methods = app.world_mut().resource_mut::<RemoteMethods>();
+    let mut methods = world.resource_mut::<RemoteMethods>();
     for (name, system) in pending.methods {
-        methods.insert(name, RemoteMethodSystemId::Instant(system));
+        insert_game_method(&mut methods, name, system);
     }
+}
+
+// Startup runs after every plugin is built, so a game-added `RemotePlugin` exists by now.
+fn drain_pending_methods_at_startup(world: &mut World) {
+    drain_pending_remote_methods(world);
+    let Some(pending) = world.get_resource::<PendingRemoteMethods>() else {
+        return;
+    };
+    let names: Vec<&str> = pending
+        .methods
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect();
+    warn!(
+        "input driver: remote methods not served because no RemotePlugin exists (set \
+         enable_remote to true or add your own RemotePlugin): {}",
+        names.join(", ")
+    );
 }
 
 /// Adds `RemotePlugin` with the driver methods, and the HTTP transport on `port`.
@@ -79,7 +121,7 @@ impl Plugin for DriverRemotePlugin {
                 .with_method_main(CLEAR_METHOD, clear_method),
             RemoteHttpPlugin::default().with_port(self.port),
         ));
-        drain_pending_remote_methods(app);
+        drain_pending_remote_methods(app.world_mut());
     }
 }
 
@@ -180,7 +222,7 @@ mod tests {
         let mut app = App::new();
         register_remote_method(&mut app, "game/echo".to_owned(), echo_params);
         app.add_plugins(RemotePlugin::default());
-        drain_pending_remote_methods(&mut app);
+        drain_pending_remote_methods(app.world_mut());
         let methods = app.world().resource::<RemoteMethods>();
         assert!(methods.get("game/echo").is_some());
         assert!(app.world().get_resource::<PendingRemoteMethods>().is_none());
@@ -194,6 +236,47 @@ mod tests {
         let methods = app.world().resource::<RemoteMethods>();
         assert!(methods.get("game/echo").is_some());
         assert!(app.world().get_resource::<PendingRemoteMethods>().is_none());
+    }
+
+    #[test]
+    fn startup_serves_pending_methods_for_a_remote_plugin_added_afterward() {
+        let mut app = App::new();
+        register_remote_method(&mut app, "game/echo".to_owned(), echo_params);
+        app.add_plugins(RemotePlugin::default());
+        app.world_mut().run_schedule(Startup);
+        let methods = app.world().resource::<RemoteMethods>();
+        assert!(methods.get("game/echo").is_some());
+        assert!(app.world().get_resource::<PendingRemoteMethods>().is_none());
+    }
+
+    #[test]
+    fn startup_without_a_remote_plugin_keeps_the_pending_methods() {
+        let mut app = App::new();
+        register_remote_method(&mut app, "game/echo".to_owned(), echo_params);
+        app.world_mut().run_schedule(Startup);
+        assert!(app.world().get_resource::<PendingRemoteMethods>().is_some());
+    }
+
+    fn instant_id(methods: &RemoteMethods, name: &str) -> Option<RemoteMethodSystem> {
+        match methods.get(name) {
+            Some(RemoteMethodSystemId::Instant(id)) => Some(*id),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn game_methods_cannot_take_driver_names() {
+        let mut app = App::new();
+        app.add_plugins(
+            RemotePlugin::default().with_method_main(SEND_METHOD, send_commands_method),
+        );
+        let driver_id = instant_id(app.world().resource::<RemoteMethods>(), SEND_METHOD);
+        assert!(driver_id.is_some());
+        register_remote_method(&mut app, SEND_METHOD.to_owned(), echo_params);
+        register_remote_method(&mut app, "drive/other".to_owned(), echo_params);
+        let methods = app.world().resource::<RemoteMethods>();
+        assert_eq!(instant_id(methods, SEND_METHOD), driver_id);
+        assert!(methods.get("drive/other").is_none());
     }
 
     #[test]

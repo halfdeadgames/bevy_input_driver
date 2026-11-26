@@ -152,6 +152,9 @@ pub trait InputDriverAppExt {
     /// the value it read, or an error message when the check fails by itself. Registering a name
     /// twice replaces the first check. Works before or after adding [`InputDriverPlugin`].
     ///
+    /// A check should return `Err` rather than panic: a panic crashes the game with a non-zero
+    /// exit code and is not recorded as a failed check.
+    ///
     /// [`InputDriverPlugin`]: crate::InputDriverPlugin
     fn add_driver_check<M>(
         &mut self,
@@ -164,6 +167,13 @@ pub trait InputDriverAppExt {
     /// The handler receives the request params. Works before or after adding
     /// [`InputDriverPlugin`]. The methods are served only while a `RemotePlugin` exists: the
     /// driver's, when `enable_remote` is true, or one the game adds itself when it is false.
+    /// Methods registered before any `RemoteMethods` exists are added when the driver's
+    /// `RemotePlugin` builds or in `Startup`; if no `RemotePlugin` exists by then, a warning
+    /// names them.
+    ///
+    /// Names starting with `drive/` are reserved: such a method is refused with an error log and
+    /// not registered. A name that replaces an existing method, built in or from an earlier
+    /// call, logs a warning.
     ///
     /// [`InputDriverPlugin`]: crate::InputDriverPlugin
     fn add_driver_remote_method<M>(

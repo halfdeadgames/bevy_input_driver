@@ -177,10 +177,12 @@ The game needs its own `serde_json = "1"` dependency for `Value` and `json!`. `B
 `expect` ends the current frame, then runs the check at the start of the next one, so the check sees how the game reacted to every command before it. The check fails when:
 
 - it returns an error,
-- `equals` is given and does not match the returned value (numbers match by value, so `5` equals `5.0`, at any depth inside arrays and objects; everything else must match exactly), or
+- `equals` is given and does not match the returned value (numbers match by value, so `5` equals `5.0`, at any depth inside arrays and objects; everything else must match exactly; `"equals": null` expects null), or
 - no check has that name (the message lists the registered names).
 
-Each result is added to `checks` in `drive/status` with `check`, `passed`, `value` (the value the check returned, if any), and `message` (why it failed, such as `expected 5, got 3`). A failure is also recorded in `errors` as `expect <name>: <message>`, adds 1 to `checks_failed`, and the queue continues, so one run reports every failure. `drive/clear` does not reset `checks_failed`.
+Each result is added to `checks` in `drive/status` with `check`, `passed`, `value` (the value the check returned, if any), and `message` (why it failed, at most 1000 characters, such as `expected 5, got 3`). A failure is also recorded in `errors` as `expect <name>: <message>`, adds 1 to `checks_failed`, and the queue continues, so one run reports every failure. `drive/clear` does not reset `checks_failed`.
+
+Return an error from a check instead of panicking. A panic, such as an `unwrap()` on a missing resource, crashes the game with a non-zero exit code, and nothing is recorded in `checks`.
 
 `quit` exits with code 1 if `checks_failed` is above 0. The exit code reaches the operating system only if `main` returns the `AppExit` from `App::run()`: write `fn main() -> AppExit { App::new() ... .run() }`.
 
@@ -196,7 +198,7 @@ fn read_score_method(In(_params): In<Option<Value>>, score: Res<Score>) -> BrpRe
 }
 ```
 
-You can call `add_driver_remote_method` before or after adding `InputDriverPlugin`. With `enable_remote` set to false the methods are served only if the game adds its own `RemotePlugin`. A name that is already taken, built-in or not, is replaced.
+You can call `add_driver_remote_method` before or after adding `InputDriverPlugin`. With `enable_remote` set to false the methods are served only if the game adds its own `RemotePlugin`, before or after the call. If none exists at startup, a warning names the methods that are not served. Names starting with `drive/` are reserved for the driver: they are refused and an error is logged. Any other name that is already taken, such as `world.query`, is replaced, and a warning is logged.
 
 ## Gotchas
 

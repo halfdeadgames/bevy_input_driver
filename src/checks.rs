@@ -62,13 +62,24 @@ impl CheckResult {
         }
     }
 
-    fn failed(check: &str, value: Option<Value>, message: String) -> Self {
+    fn failed(check: &str, value: Option<Value>, message: &str) -> Self {
         Self {
             check: check.to_owned(),
             passed: false,
             value,
-            message: Some(message),
+            message: Some(truncate_message(message)),
         }
+    }
+}
+
+/// The most characters a failure message keeps.
+const MAX_MESSAGE_CHARS: usize = 1000;
+
+// Counts chars, not bytes, so the cut never lands inside a multi-byte character.
+fn truncate_message(message: &str) -> String {
+    match message.char_indices().nth(MAX_MESSAGE_CHARS) {
+        None => message.to_owned(),
+        Some((cut, _)) => format!("{}...", &message[..cut]),
     }
 }
 
@@ -195,11 +206,11 @@ pub fn evaluate_check(
     equals: Option<&Value>,
 ) -> CheckResult {
     match run_check(world, name, args) {
-        Err(problem) => CheckResult::failed(name, None, problem.to_string()),
+        Err(problem) => CheckResult::failed(name, None, &problem.to_string()),
         Ok(value) => match equals {
             Some(expected) if !json_values_equal(expected, &value) => {
                 let message = format!("expected {expected}, got {value}");
-                CheckResult::failed(name, Some(value), message)
+                CheckResult::failed(name, Some(value), &message)
             }
             _ => CheckResult::passed(name, value),
         },
@@ -385,6 +396,42 @@ mod tests {
             status.errors,
             vec!["expect five: expected 6, got 5".to_owned()]
         );
+    }
+
+    fn returns_null(In(_args): In<Value>) -> Result<Value, String> {
+        Ok(Value::Null)
+    }
+
+    #[test]
+    fn equals_null_fails_for_a_value_and_passes_for_null() {
+        let mut world = world_with_checks();
+        let null_check = world.register_system(returns_null);
+        world
+            .resource_mut::<DriverChecks>()
+            .insert("null".to_owned(), null_check);
+        expect(&mut world, "five", Value::Null, Some(Value::Null));
+        expect(&mut world, "null", Value::Null, Some(Value::Null));
+        let status = world.resource::<DriverStatus>();
+        assert!(!status.checks[0].passed);
+        assert_eq!(
+            status.checks[0].message.as_deref(),
+            Some("expected null, got 5")
+        );
+        assert!(status.checks[1].passed);
+    }
+
+    #[test]
+    fn long_messages_are_cut_at_a_char_boundary() {
+        let short = "a".repeat(MAX_MESSAGE_CHARS);
+        assert_eq!(truncate_message(&short), short);
+
+        let long = format!("{}é{}", "a".repeat(MAX_MESSAGE_CHARS - 1), "b".repeat(50));
+        let cut = truncate_message(&long);
+        assert_eq!(cut.chars().count(), MAX_MESSAGE_CHARS + 3);
+        assert!(cut.ends_with("é..."), "{cut}");
+
+        let straddling = format!("{}éé", "a".repeat(MAX_MESSAGE_CHARS - 1));
+        assert!(truncate_message(&straddling).ends_with("é..."));
     }
 
     #[test]
