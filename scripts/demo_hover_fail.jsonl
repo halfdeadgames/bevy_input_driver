@@ -1,0 +1,7 @@
+// Same as demo_hover.jsonl but expects a wrong list. Run from the crate folder:
+//   cargo run --example driver_demo -- --input-script scripts/demo_hover_fail.jsonl --seed 42
+// Expected: the check fails and the process exits with code 1.
+{"command":"wait_until_drawn"}
+{"command":"mouse_move","x":140,"y":80}
+{"command":"expect","check":"hovered_entities","equals":["square"]}
+{"command":"quit"}

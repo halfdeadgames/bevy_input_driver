@@ -9,6 +9,7 @@ use crate::{
     clipboard_injection::DriverClipboardPlugin,
     executor::DriverExecutorPlugin,
     gamepad_injection::DriverGamepadPlugin,
+    hover_check::DriverHoverCheckPlugin,
     injection::DriverWindowEventPlugin,
     real_input::{DriverRealInputPlugin, place_window_off_screen_for_scripts},
     remote::DriverRemotePlugin,
@@ -96,6 +97,7 @@ impl Plugin for InputDriverPlugin {
             DriverTimeControlPlugin,
             DriverStateHandlersPlugin,
             DriverChecksPlugin,
+            DriverHoverCheckPlugin,
             DriverTargetsPlugin,
             DriverRenderReadinessPlugin,
         ))

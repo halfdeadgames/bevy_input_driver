@@ -1,0 +1,8 @@
+// Self-checking test of the built-in hovered_entities check. Run from the crate folder:
+//   cargo run --example driver_demo -- --input-script scripts/demo_hover.jsonl --seed 42
+// Expected: the check passes and the process exits with code 0. The mouse is over the demo
+// button (left 40, top 40, 200 by 80), which has no children and blocks the window below it.
+{"command":"wait_until_drawn"}
+{"command":"mouse_move","x":140,"y":80}
+{"command":"expect","check":"hovered_entities","equals":["button"]}
+{"command":"quit"}

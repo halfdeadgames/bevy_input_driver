@@ -31,6 +31,7 @@ pub mod clipboard_injection;
 pub mod commands;
 pub mod executor;
 pub mod gamepad_injection;
+mod hover_check;
 pub mod injection;
 pub mod plugin;
 pub mod real_input;

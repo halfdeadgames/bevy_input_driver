@@ -64,7 +64,7 @@ One JSON object per command, tagged by `command`. Positions are logical pixels i
 | `real_input` | `{"command":"real_input","blocked":false}` (`blocked` is required; see [Blocking real input](#blocking-real-input)) |
 | `release_all` | `{"command":"release_all"}` |
 | `quit` | `{"command":"quit"}` (exit code 1 if any `expect` check or target failed, otherwise 0) |
-| `expect` | `{"command":"expect","check":"score","arguments":{"player":1},"equals":5}` (runs your registered check; `arguments` and `equals` are optional; see [Checks](#checks)) |
+| `expect` | `{"command":"expect","check":"score","arguments":{"player":1},"equals":5}` (runs your registered check; `arguments` and `equals` are optional; see [Checks](#checks); `hovered_entities` is built in) |
 | `set_seed` | `{"command":"set_seed","seed":42}` (sets `DriverSeed`) |
 | `time_pause` / `time_resume` | `{"command":"time_pause"}` (pauses or resumes `Time<Virtual>`) |
 | `time_speed` | `{"command":"time_speed","factor":0.5}` (factor must be finite and above 0) |
@@ -226,6 +226,19 @@ Each result is added to `checks` in `drive/status` with `check`, `passed`, `valu
 Return an error from a check instead of panicking. A panic, such as an `unwrap()` on a missing resource, crashes the game with a non-zero exit code, and nothing is recorded in `checks`.
 
 `quit` exits with code 1 if `checks_failed` is above 0. The exit code reaches the operating system only if `main` returns the `AppExit` from `App::run()`: write `fn main() -> AppExit { App::new() ... .run() }`.
+
+### Built-in check: hovered_entities
+
+The driver registers one check itself, `hovered_entities`. It reads bevy_picking's `HoverMap` and returns the names of the entities a pointer hovers over as an array of strings, for example `{"command":"expect","check":"hovered_entities","arguments":{"pointer":"touch","id":2},"equals":["Grid layer"]}`.
+
+- Arguments: leave them out or give `{"pointer":"mouse"}` for the mouse, or `{"pointer":"touch","id":2}` for that touch pointer (the same `id` key as the `touch` command). Any other shape is an error that names these shapes.
+- Order: nearest first by picking depth, with ties sorted by name. Depths from different cameras are not strictly comparable.
+- Names: an entity with a `Name` shows that name. A window without a `Name` shows `window`. bevy_picking counts the window as hovered wherever nothing else is, so a pointer over empty space returns `["window"]`. Any other entity shows Bevy's entity ID text, such as `12v1`, which can change with spawn order. Give each entity you test its own `Name`, because two entities with the same name look the same in the list.
+- A pointer that exists but hovers over nothing returns `[]`. A pointer that does not exist is an error such as `no pointer touch 5; pointers: mouse, touch 2`. A touch pointer exists only while its touch is active, so an `expect` after the touch ends or is canceled gets this error, not `[]`.
+- A pointer that has captured an entity reports only that entity, even when others are under it, because bevy_picking puts only the captured entity in the `HoverMap`.
+- A game that does not run bevy_picking fails with `hovered_entities needs bevy_picking: no HoverMap resource (add DefaultPlugins or PickingPlugin)`.
+- A blocking layer (`Pickable { should_block_lower: true }`) keeps the entities below it out of the list, because the `HoverMap` leaves them out.
+- A check you register yourself under the name `hovered_entities` replaces the built-in one, whether you register it before or after adding the driver plugin.
 
 ## Targets
 
