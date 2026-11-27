@@ -14,6 +14,15 @@
 //! the `checks` list of `drive/status`, every failure also adds an entry to `errors` and counts
 //! in `checks_failed`, and a `quit` exits with code 1 when `checks_failed` is above 0.
 //! [`InputDriverAppExt::add_driver_remote_method`] adds the game's own BRP methods.
+//!
+//! A script can also point by meaning instead of by pixel. Register a target with
+//! [`InputDriverAppExt::add_driver_target`], a system that turns JSON arguments into a logical
+//! window position, then write `{"command":"click","at":{"target":"name","column":3}}`. The
+//! system receives every key of `at` except `target` as a JSON object. `click`, `mouse_move`,
+//! and `touch` take `at` instead of `x` and `y`, and the ends of `drag` and `touch_drag` take
+//! either `[x, y]` or a target object. A target resolves right before its command runs. If it is
+//! unknown or returns an error, the command sends no input, the failure lands in `errors` and
+//! counts in `targets_failed`, and a `quit` exits with code 1.
 
 #![warn(missing_docs)]
 
@@ -31,14 +40,16 @@ pub mod seed;
 pub mod state_handlers;
 pub mod status;
 pub mod steps;
+pub mod targets;
 pub mod time_control;
 pub mod window_control;
 
 pub use checks::{CheckResult, DriverChecks};
-pub use commands::{CommandParseError, DriverCommand};
+pub use commands::{CommandParseError, DriverCommand, DriverTarget, PointerPosition};
 pub use plugin::InputDriverPlugin;
 pub use render_readiness::{FailedPipeline, RenderReadiness};
 pub use seed::DriverSeed;
 pub use state_handlers::{DriverStateHandlers, InputDriverAppExt};
 pub use status::DriverStatus;
 pub use steps::{DriverQueue, DriverStep};
+pub use targets::{DriverTargets, TargetError};

@@ -1,0 +1,15 @@
+// Self-checking test of game-defined targets for examples/driver_demo.rs. Run from the crate folder:
+//   cargo run --example driver_demo -- --input-script scripts/demo_targets.jsonl --seed 42
+// Expected: every check passes, no target fails, and the process exits with code 0. No pixel
+// position of the button or square appears below: the demo's node_center target finds them.
+// The second drag starts from the square's new center, which only run-time resolution knows.
+{"command":"wait_until_drawn"}
+{"command":"click","at":{"target":"node_center","name":"button"}}
+{"command":"expect","check":"button_is_green","equals":true}
+{"command":"drag","from":{"target":"node_center","name":"square"},"to":[650,380],"frames":12}
+{"command":"expect","check":"square_top_left","equals":[600,330]}
+{"command":"drag","from":{"target":"node_center","name":"square"},"to":[550,330],"frames":12}
+{"command":"expect","check":"square_top_left","equals":[500,280]}
+{"command":"screenshot","path":"target/driver-targets/after-drags.png"}
+{"command":"wait_frames","frames":5}
+{"command":"quit"}

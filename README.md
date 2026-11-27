@@ -27,7 +27,7 @@ Try it with the demo scene: `cargo run --example driver_demo`.
 
 ## Commands
 
-One JSON object per command, tagged by `command`. Positions are logical pixels in the primary window, origin top left. Keys use Bevy `KeyCode` names, buttons use `MouseButton` names (`Left` by default).
+One JSON object per command, tagged by `command`. Positions are logical pixels in the primary window, origin top left. Keys use Bevy `KeyCode` names, buttons use `MouseButton` names (`Left` by default). `mouse_move`, `click`, `touch`, `drag`, and `touch_drag` can also name a place your game defines instead of giving pixels; see [Targets](#targets).
 
 | Command | Example |
 | --- | --- |
@@ -35,10 +35,10 @@ One JSON object per command, tagged by `command`. Positions are logical pixels i
 | `key_up` | `{"command":"key_up","key":"KeyA"}` |
 | `key_tap` | `{"command":"key_tap","key":"Space","hold_frames":2}` (default 1) |
 | `type_text` | `{"command":"type_text","text":"hello"}` |
-| `mouse_move` | `{"command":"mouse_move","x":100,"y":80}` |
+| `mouse_move` | `{"command":"mouse_move","x":100,"y":80}` or `{"command":"mouse_move","at":{"target":"cell","column":3,"row":5}}` |
 | `mouse_down` / `mouse_up` | `{"command":"mouse_down","button":"Right"}` |
-| `click` | `{"command":"click","x":140,"y":80}` (moves first when `x` and `y` are given) |
-| `drag` | `{"command":"drag","from":[450,300],"to":[200,300],"frames":10}` |
+| `click` | `{"command":"click","x":140,"y":80}` (moves first when `x` and `y` or `at` are given) |
+| `drag` | `{"command":"drag","from":[450,300],"to":[200,300],"frames":10}` (`from` and `to` can each be a target object) |
 | `scroll` | `{"command":"scroll","y":-3,"unit":"line"}` (`line` or `pixel`) |
 | `touch` | `{"command":"touch","phase":"started","x":50,"y":60,"id":0}` (`started`, `moved`, `ended`, `canceled`) |
 | `touch_drag` | `{"command":"touch_drag","from":[0,0],"to":[100,100],"id":0,"frames":10}` |
@@ -52,7 +52,7 @@ One JSON object per command, tagged by `command`. Positions are logical pixels i
 | `window_minimize` / `window_restore` | `{"command":"window_minimize"}` (see [Minimized windows](#minimized-windows)) |
 | `real_input` | `{"command":"real_input","blocked":false}` (`blocked` is required; see [Blocking real input](#blocking-real-input)) |
 | `release_all` | `{"command":"release_all"}` |
-| `quit` | `{"command":"quit"}` (exit code 1 if any `expect` check failed, otherwise 0) |
+| `quit` | `{"command":"quit"}` (exit code 1 if any `expect` check or target failed, otherwise 0) |
 | `expect` | `{"command":"expect","check":"score","arguments":{"player":1},"equals":5}` (runs your registered check; `arguments` and `equals` are optional; see [Checks](#checks)) |
 | `set_seed` | `{"command":"set_seed","seed":42}` (sets `DriverSeed`) |
 | `time_pause` / `time_resume` | `{"command":"time_pause"}` (pauses or resumes `Time<Virtual>`) |
@@ -68,7 +68,7 @@ Every command is visible to game systems for at least one frame of its own. `key
 
 ## Live use over BRP
 
-BRP methods: `drive/send` (one command object or an array; all are parsed before any is queued), `drive/status`, and `drive/clear` (empties the queue and releases everything the driver holds). `drive/status` reports `frame_count`, `queue_length`, `idle`, `cursor_position`, `held_keys`, `held_buttons`, `held_touches`, `pending_screenshots`, `screenshots_saved`, `errors` (last 50), and `script_loaded`, `seed`, `paused`, `speed`, `fixed_step_milliseconds` (null under real time), `virtual_elapsed_seconds`, `state_operations` (last 50 entries such as `saved saves/slot1.txt`), `checks` (last 50 check results), `checks_failed` (every failed check since launch), `render_ready`, `pipelines_pending`, `failed_pipelines` (each entry has `label`, `shader_paths`, and `error`), `render_frame_count` (runs of Bevy's `Render` schedule, or null without a renderer), `window_size` (the primary window's `[width, height]` in physical pixels, or null without a primary window), `window_minimized`, `window_os_minimized` (see [Minimized windows](#minimized-windows)), and `real_input_blocked` (see [Blocking real input](#blocking-real-input)). The time, render, and window fields are refreshed once per frame, and `speed` reads 0 until the first frame finishes. `render_frame_count` usually runs 1 or 2 behind `frame_count`, because a frame is drawn while the next one runs. It counts render runs, not frames shown on screen, so it keeps rising in a minimized window.
+BRP methods: `drive/send` (one command object or an array; all are parsed before any is queued), `drive/status`, and `drive/clear` (empties the queue and releases everything the driver holds). `drive/status` reports `frame_count`, `queue_length`, `idle`, `cursor_position`, `held_keys`, `held_buttons`, `held_touches`, `pending_screenshots`, `screenshots_saved`, `errors` (last 50), and `script_loaded`, `seed`, `paused`, `speed`, `fixed_step_milliseconds` (null under real time), `virtual_elapsed_seconds`, `state_operations` (last 50 entries such as `saved saves/slot1.txt`), `checks` (last 50 check results), `checks_failed` (every failed check since launch), `targets_failed` (every failed target since launch; see [Targets](#targets)), `render_ready`, `pipelines_pending`, `failed_pipelines` (each entry has `label`, `shader_paths`, and `error`), `render_frame_count` (runs of Bevy's `Render` schedule, or null without a renderer), `window_size` (the primary window's `[width, height]` in physical pixels, or null without a primary window), `window_minimized`, `window_os_minimized` (see [Minimized windows](#minimized-windows)), and `real_input_blocked` (see [Blocking real input](#blocking-real-input)). The time, render, and window fields are refreshed once per frame, and `speed` reads 0 until the first frame finishes. `render_frame_count` usually runs 1 or 2 behind `frame_count`, because a frame is drawn while the next one runs. It counts render runs, not frames shown on screen, so it keeps rising in a minimized window.
 
 The helper `tools/drive.py` needs only Python 3:
 
@@ -201,6 +201,38 @@ Each result is added to `checks` in `drive/status` with `check`, `passed`, `valu
 Return an error from a check instead of panicking. A panic, such as an `unwrap()` on a missing resource, crashes the game with a non-zero exit code, and nothing is recorded in `checks`.
 
 `quit` exits with code 1 if `checks_failed` is above 0. The exit code reaches the operating system only if `main` returns the `AppExit` from `App::run()`: write `fn main() -> AppExit { App::new() ... .run() }`.
+
+## Targets
+
+A target lets a script name a position by what is there, such as "grid cell 3, 5", instead of by pixel coordinates. Scripts that use targets keep working when the window size, font size, or layout changes.
+
+Register a target by name as a one-shot system. It receives the target object's other keys as `In<serde_json::Value>` and returns either a logical window position or an error message:
+
+```rust
+use bevy_input_driver::InputDriverAppExt;
+use serde_json::Value;
+
+app.add_driver_target("cell", cell_center);
+
+fn cell_center(In(arguments): In<Value>, grid: Res<GridLayout>) -> Result<Vec2, String> {
+    let column = arguments.get("column").and_then(Value::as_u64).ok_or("needs a column")?;
+    let row = arguments.get("row").and_then(Value::as_u64).ok_or("needs a row")?;
+    grid.cell_center(column, row).ok_or_else(|| format!("no cell {column}, {row}"))
+}
+```
+
+Then write a target object where a position goes:
+
+- `mouse_move`, `click`, and `touch` take `"at": {"target":"cell","column":3,"row":5}` in place of `x` and `y`. Giving `at` together with `x` or `y` is rejected.
+- `drag` and `touch_drag` take a target object in place of either `[x, y]` in `from` and `to`, such as `"from":{"target":"cell","column":1,"row":1},"to":[400,300]`.
+
+The key `target` holds the name, so your system never receives an argument called `target`. Every other key is passed through unchanged.
+
+The driver asks your system for the position when the command is about to run, not when the script is read, so a target follows whatever moved earlier in the script. A `drag` asks for both ends once, before it starts. This costs one extra frame per command that uses a target. `drive/status` does not report `idle` while that request is pending.
+
+A target fails when no target has that name, your system returns an error, or it returns a position that is not a finite number. The failure is recorded in `errors` as `<command>: <reason>`, adds 1 to `targets_failed` in `drive/status`, and sends none of that command's input. The queue continues with the next command. `quit` exits with code 1 if `targets_failed` or `checks_failed` is above 0.
+
+`examples/driver_demo.rs` registers a `node_center` target that finds a UI node by its `Name`, and `scripts/demo_targets.jsonl` clicks and drags with it without any pixel positions.
 
 ## Game BRP methods
 

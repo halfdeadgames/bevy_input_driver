@@ -13,6 +13,7 @@ use crate::{
     script_file::{load_script_file, log_driver_startup},
     seed::DriverSeedPlugin,
     state_handlers::DriverStateHandlersPlugin,
+    targets::DriverTargetsPlugin,
     time_control::DriverTimeControlPlugin,
 };
 
@@ -89,6 +90,7 @@ impl Plugin for InputDriverPlugin {
             DriverTimeControlPlugin,
             DriverStateHandlersPlugin,
             DriverChecksPlugin,
+            DriverTargetsPlugin,
             DriverRenderReadinessPlugin,
         ))
         .add_systems(Startup, (load_script_file, log_driver_startup).chain());

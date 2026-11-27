@@ -9,6 +9,7 @@ use crate::{
     checks::register_driver_check,
     remote::register_remote_method,
     status::{DriverStatus, record_error_in_world},
+    targets::register_driver_target,
 };
 
 /// One-shot system id of a hook that receives the file path from the command.
@@ -162,6 +163,23 @@ pub trait InputDriverAppExt {
         check_system: impl IntoSystem<In<Value>, Result<Value, String>, Marker> + 'static,
     ) -> &mut Self;
 
+    /// Registers a target that `click`, `mouse_move`, `touch`, `drag`, and `touch_drag` can aim
+    /// at by `name`, such as `{"command":"click","at":{"target":"cell","column":3,"row":5}}`.
+    ///
+    /// The system receives every key of the `at` object except `target` as an `In<Value>` JSON
+    /// object, and returns a logical window position (origin top left), or an error message. It
+    /// runs right before its command's input is sent, so it sees the layout as earlier commands
+    /// left it. On an error, or an unknown name, the command sends no input and the failure is
+    /// recorded in `errors` and `targets_failed` of `drive/status`. Registering a name twice
+    /// replaces the first target. Works before or after adding [`InputDriverPlugin`].
+    ///
+    /// [`InputDriverPlugin`]: crate::InputDriverPlugin
+    fn add_driver_target<Marker>(
+        &mut self,
+        name: impl Into<String>,
+        target_system: impl IntoSystem<In<Value>, Result<Vec2, String>, Marker> + 'static,
+    ) -> &mut Self;
+
     /// Registers a BRP method served next to the `drive/*` methods, such as `game/score`.
     ///
     /// The handler receives the request params. Works before or after adding
@@ -190,6 +208,15 @@ impl InputDriverAppExt for App {
         check_system: impl IntoSystem<In<Value>, Result<Value, String>, Marker> + 'static,
     ) -> &mut Self {
         register_driver_check(self, name.into(), check_system);
+        self
+    }
+
+    fn add_driver_target<Marker>(
+        &mut self,
+        name: impl Into<String>,
+        target_system: impl IntoSystem<In<Value>, Result<Vec2, String>, Marker> + 'static,
+    ) -> &mut Self {
+        register_driver_target(self, name.into(), target_system);
         self
     }
 

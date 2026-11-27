@@ -21,6 +21,7 @@ use crate::{
     state_handlers::queue_state_operation,
     status::DriverStatus,
     steps::{DrawnWaitProgress, DriverQueue, DriverStep},
+    targets::queue_target_resolution,
     time_control::{TimeControlAction, queue_time_action},
     window_control::queue_window_action,
 };
@@ -99,6 +100,11 @@ pub fn execute_driver_steps(
         while let Some(step) = queue.pop_next_step() {
             match step {
                 DriverStep::EndFrame => break,
+                DriverStep::ResolveTargets(command) => {
+                    queue.begin_target_resolution();
+                    queue_target_resolution(&mut commands, command, queue.generation());
+                    break;
+                }
                 DriverStep::BeginSteppedFrames => {
                     queue_time_action(&mut commands, TimeControlAction::Resume);
                     queue.set_stepping_frames(true);
@@ -230,6 +236,7 @@ fn apply_step(
             queue_state_operation(commands, *operation, path.clone());
         }
         DriverStep::EndFrame
+        | DriverStep::ResolveTargets(_)
         | DriverStep::WaitFrames(_)
         | DriverStep::WaitSeconds(_)
         | DriverStep::WaitUntilDrawn { .. }

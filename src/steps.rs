@@ -16,7 +16,7 @@ use bevy::{
 use serde_json::Value;
 
 use crate::{
-    commands::{DriverCommand, ScrollUnit, TouchCommandPhase},
+    commands::{DriverCommand, PointerPosition, ScrollUnit, TouchCommandPhase},
     state_handlers::StateOperation,
     time_control::TimeControlAction,
     window_control::WindowAction,
@@ -190,6 +190,9 @@ pub enum DriverStep {
         /// Value the check must return, if any.
         equals: Option<Value>,
     },
+    /// Turn the command's targets into pixels, then queue the command's normal steps in front of
+    /// everything else. The executor stops for the frame so nothing runs before that happens.
+    ResolveTargets(DriverCommand),
     /// Stop executing until the next frame so game systems see the steps so far.
     EndFrame,
     /// Skip this many frames.
@@ -299,10 +302,26 @@ fn click_steps(button: MouseButton, position: Option<Vec2>) -> Vec<DriverStep> {
     with_picking_barrier(steps)
 }
 
+fn pixel_position(x: Option<f32>, y: Option<f32>) -> Option<Vec2> {
+    x.zip(y).map(|(x, y)| Vec2::new(x, y))
+}
+
+// Parsing guarantees every pointer command has pixels once its targets are resolved. A command
+// built by hand without them expands to nothing, because there is nowhere to point.
+fn drag_ends(from: &PointerPosition, to: &PointerPosition) -> Option<(Vec2, Vec2)> {
+    from.pixels().zip(to.pixels())
+}
+
 /// Expands one command into primitive steps. Every input step is followed by an
 /// [`DriverStep::EndFrame`] so game systems see it for at least one frame.
+///
+/// A command that still names a target expands to the single step
+/// [`DriverStep::ResolveTargets`], because the target's pixels are unknown until it runs.
 #[must_use]
 pub fn expand_command(command: &DriverCommand) -> Vec<DriverStep> {
+    if command.has_targets() {
+        return vec![DriverStep::ResolveTargets(command.clone())];
+    }
     match command {
         DriverCommand::KeyDown { key, text } => then_end_frame(DriverStep::KeyDown {
             key: *key,
@@ -315,25 +334,25 @@ pub fn expand_command(command: &DriverCommand) -> Vec<DriverStep> {
             hold_frames,
         } => key_tap_steps(*key, text.as_deref(), *hold_frames),
         DriverCommand::TypeText { text } => type_text_steps(text),
-        DriverCommand::MouseMove { x, y } => then_end_frame(DriverStep::MouseMove {
-            position: Vec2::new(*x, *y),
-        }),
+        DriverCommand::MouseMove { x, y, .. } => pixel_position(*x, *y)
+            .map_or_else(Vec::new, |position| {
+                then_end_frame(DriverStep::MouseMove { position })
+            }),
         DriverCommand::MouseDown { button } => {
             then_end_frame(DriverStep::MouseDown { button: *button })
         }
         DriverCommand::MouseUp { button } => {
             then_end_frame(DriverStep::MouseUp { button: *button })
         }
-        DriverCommand::Click { button, x, y } => {
-            let position = x.zip(*y).map(|(x, y)| Vec2::new(x, y));
-            click_steps(*button, position)
-        }
+        DriverCommand::Click { button, x, y, .. } => click_steps(*button, pixel_position(*x, *y)),
         DriverCommand::Drag {
             from,
             to,
             button,
             frames,
-        } => mouse_drag_steps(Vec2::from(*from), Vec2::from(*to), *button, *frames),
+        } => drag_ends(from, to).map_or_else(Vec::new, |(from, to)| {
+            mouse_drag_steps(from, to, *button, *frames)
+        }),
         DriverCommand::Scroll { x, y, unit } => {
             with_picking_barrier(then_end_frame(DriverStep::Scroll {
                 unit: match unit {
@@ -344,19 +363,23 @@ pub fn expand_command(command: &DriverCommand) -> Vec<DriverStep> {
                 y: *y,
             }))
         }
-        DriverCommand::Touch { phase, x, y, id } => {
+        DriverCommand::Touch {
+            phase, x, y, id, ..
+        } => pixel_position(*x, *y).map_or_else(Vec::new, |position| {
             with_picking_barrier(then_end_frame(DriverStep::Touch {
                 phase: bevy_touch_phase(*phase),
-                position: Vec2::new(*x, *y),
+                position,
                 id: *id,
             }))
-        }
+        }),
         DriverCommand::TouchDrag {
             from,
             to,
             id,
             frames,
-        } => touch_drag_steps(Vec2::from(*from), Vec2::from(*to), *id, *frames),
+        } => drag_ends(from, to).map_or_else(Vec::new, |(from, to)| {
+            touch_drag_steps(from, to, *id, *frames)
+        }),
         DriverCommand::Pinch { delta } => then_end_frame(DriverStep::Pinch { delta: *delta }),
         DriverCommand::Rotate { delta } => then_end_frame(DriverStep::Rotate { delta: *delta }),
         DriverCommand::Pan { x, y } => then_end_frame(DriverStep::Pan {
@@ -461,9 +484,37 @@ pub struct DriverQueue {
     steps: VecDeque<DriverStep>,
     wait: PendingWait,
     stepping_frames: bool,
+    generation: u64,
+    resolution_in_flight: bool,
 }
 
 impl DriverQueue {
+    /// Records that a target resolution was queued and has not run yet, so the queue is not idle
+    /// even though the command's steps are not queued yet.
+    pub fn begin_target_resolution(&mut self) {
+        self.resolution_in_flight = true;
+    }
+
+    /// Records that the queued target resolution ran, whether it pushed steps, failed, or found
+    /// the queue cleared.
+    pub fn finish_target_resolution(&mut self) {
+        self.resolution_in_flight = false;
+    }
+
+    /// Counts how many times the queue was cleared. A deferred action that captured the number
+    /// when it was queued can tell, when it runs, that a clear happened in between.
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Puts `steps` before everything already queued, keeping their order.
+    pub fn push_steps_to_front(&mut self, steps: Vec<DriverStep>) {
+        for step in steps.into_iter().rev() {
+            self.steps.push_front(step);
+        }
+    }
+
     /// Appends the expansion of every command.
     pub fn enqueue_commands<'a>(&mut self, commands: impl IntoIterator<Item = &'a DriverCommand>) {
         for command in commands {
@@ -478,6 +529,7 @@ impl DriverQueue {
     pub fn clear_and_release_all(&mut self) {
         let was_stepping_frames = std::mem::take(&mut self.stepping_frames);
         self.steps.clear();
+        self.generation = self.generation.wrapping_add(1);
         self.wait = PendingWait::default();
         self.steps.push_back(DriverStep::ReleaseAll);
         if was_stepping_frames {
@@ -498,10 +550,11 @@ impl DriverQueue {
         self.steps.len()
     }
 
-    /// True when no step is pending and no wait is active.
+    /// True when no step is pending, no target resolution is in flight, and no wait is active.
     #[must_use]
     pub fn is_idle(&self) -> bool {
         self.steps.is_empty()
+            && !self.resolution_in_flight
             && self.wait.frames_remaining == 0
             && self.wait.until.is_none()
             && self.wait.drawn_deadline.is_none()
@@ -940,6 +993,44 @@ mod tests {
         );
         queue.clear_and_release_all();
         assert_eq!(queue.step_count(), 2);
+    }
+
+    #[test]
+    fn a_command_with_a_target_expands_to_one_deferred_step() {
+        for text in [
+            r#"{"command":"click","at":{"target":"cell"}}"#,
+            r#"{"command":"drag","from":[0,0],"to":{"target":"cell"}}"#,
+        ] {
+            let command = parse_command_text(text).expect("command should parse");
+            assert_eq!(
+                expand_command(&command),
+                vec![DriverStep::ResolveTargets(command)],
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_target_resolution_in_flight_keeps_the_queue_busy() {
+        let mut queue = DriverQueue::default();
+        assert!(queue.is_idle());
+        queue.begin_target_resolution();
+        assert!(!queue.is_idle());
+        queue.finish_target_resolution();
+        assert!(queue.is_idle());
+    }
+
+    #[test]
+    fn pushing_to_the_front_keeps_order_and_clearing_bumps_the_generation() {
+        let mut queue = DriverQueue::default();
+        queue.push_steps_to_front(vec![DriverStep::EndFrame]);
+        queue.push_steps_to_front(vec![DriverStep::ReleaseAll, DriverStep::Quit]);
+        assert_eq!(queue.pop_next_step(), Some(DriverStep::ReleaseAll));
+        assert_eq!(queue.pop_next_step(), Some(DriverStep::Quit));
+        assert_eq!(queue.pop_next_step(), Some(DriverStep::EndFrame));
+        let before = queue.generation();
+        queue.clear_and_release_all();
+        assert_ne!(queue.generation(), before);
     }
 
     #[test]

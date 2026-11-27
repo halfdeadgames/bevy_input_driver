@@ -2,14 +2,75 @@
 
 use std::fmt;
 
-use bevy::input::{keyboard::KeyCode, mouse::MouseButton};
-use serde::Deserialize;
-use serde_json::Value;
+use bevy::{
+    input::{keyboard::KeyCode, mouse::MouseButton},
+    math::Vec2,
+};
+use serde::{Deserialize, de::Error as _};
+use serde_json::{Map, Value};
 
 use crate::render_readiness::SETTLED_RENDER_FRAMES;
 
 /// A position in logical pixels in the primary window, origin top left.
 pub type LogicalPoint = [f32; 2];
+
+/// A position the game names instead of the script spelling it in pixels, such as
+/// `{"target":"cell","column":3,"row":5}`.
+///
+/// The game turns it into a pixel position with a system registered through
+/// `add_driver_target`, right before the command runs.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct DriverTarget {
+    /// Name the game registered its target system under.
+    pub target: String,
+    /// Every other key of the object, handed to the target system as a JSON object. The key
+    /// `target` is reserved for the name, so a target system never receives an argument by that
+    /// name.
+    #[serde(flatten)]
+    pub arguments: Map<String, Value>,
+}
+
+/// One end of a `drag` or `touch_drag`: a pixel position or a game-defined target.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PointerPosition {
+    /// Logical pixels, written as `[x, y]`.
+    Pixels(LogicalPoint),
+    /// A position the game's target system computes when the command starts.
+    Target(DriverTarget),
+}
+
+impl PointerPosition {
+    /// The pixel position, or none while it is still a target.
+    #[must_use]
+    pub fn pixels(&self) -> Option<Vec2> {
+        match self {
+            Self::Pixels(point) => Some(Vec2::from(*point)),
+            Self::Target(_) => None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PointerPosition {
+    fn deserialize<DeserializerType>(
+        deserializer: DeserializerType,
+    ) -> Result<Self, DeserializerType::Error>
+    where
+        DeserializerType: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        match value {
+            Value::Array(_) => serde_json::from_value(value)
+                .map(Self::Pixels)
+                .map_err(DeserializerType::Error::custom),
+            Value::Object(_) => serde_json::from_value(value)
+                .map(Self::Target)
+                .map_err(DeserializerType::Error::custom),
+            _ => Err(DeserializerType::Error::custom(
+                "a position must be [x, y] or an object with a \"target\" key",
+            )),
+        }
+    }
+}
 
 const DEFAULT_TAP_HOLD_FRAMES: u32 = 1;
 const DEFAULT_DRAG_FRAMES: u32 = 10;
@@ -100,12 +161,17 @@ pub enum DriverCommand {
         /// Characters to type.
         text: String,
     },
-    /// Move the cursor.
+    /// Move the cursor, to `at` or to `x` and `y`. Exactly one of the two forms is required.
     MouseMove {
-        /// Logical x.
-        x: f32,
-        /// Logical y.
-        y: f32,
+        /// Logical x. Requires `y`.
+        #[serde(default)]
+        x: Option<f32>,
+        /// Logical y. Requires `x`.
+        #[serde(default)]
+        y: Option<f32>,
+        /// Game-defined target to move to, instead of `x` and `y`.
+        #[serde(default)]
+        at: Option<DriverTarget>,
     },
     /// Press a mouse button.
     MouseDown {
@@ -119,7 +185,7 @@ pub enum DriverCommand {
         #[serde(default = "default_mouse_button")]
         button: MouseButton,
     },
-    /// Press and release a mouse button, moving first when `x` and `y` are given.
+    /// Press and release a mouse button, moving first when `at`, or `x` and `y`, are given.
     Click {
         /// Button, `Left` by default.
         #[serde(default = "default_mouse_button")]
@@ -130,13 +196,16 @@ pub enum DriverCommand {
         /// Logical y to move to first. Requires `x`.
         #[serde(default)]
         y: Option<f32>,
+        /// Game-defined target to move to first, instead of `x` and `y`.
+        #[serde(default)]
+        at: Option<DriverTarget>,
     },
     /// Press at `from`, move in evenly spaced steps to `to`, and release.
     Drag {
-        /// Start position.
-        from: LogicalPoint,
-        /// End position.
-        to: LogicalPoint,
+        /// Start position, `[x, y]` or a game-defined target.
+        from: PointerPosition,
+        /// End position, `[x, y]` or a game-defined target.
+        to: PointerPosition,
         /// Button, `Left` by default.
         #[serde(default = "default_mouse_button")]
         button: MouseButton,
@@ -160,20 +229,25 @@ pub enum DriverCommand {
     Touch {
         /// Touch phase.
         phase: TouchCommandPhase,
-        /// Logical x.
-        x: f32,
-        /// Logical y.
-        y: f32,
+        /// Logical x. Requires `y`.
+        #[serde(default)]
+        x: Option<f32>,
+        /// Logical y. Requires `x`.
+        #[serde(default)]
+        y: Option<f32>,
+        /// Game-defined target to touch, instead of `x` and `y`.
+        #[serde(default)]
+        at: Option<DriverTarget>,
         /// Finger identifier.
         #[serde(default)]
         id: u64,
     },
     /// Touch down at `from`, move in evenly spaced steps to `to`, and lift.
     TouchDrag {
-        /// Start position.
-        from: LogicalPoint,
-        /// End position.
-        to: LogicalPoint,
+        /// Start position, `[x, y]` or a game-defined target.
+        from: PointerPosition,
+        /// End position, `[x, y]` or a game-defined target.
+        to: PointerPosition,
         /// Finger identifier.
         #[serde(default)]
         id: u64,
@@ -311,6 +385,11 @@ pub enum CommandParseError {
     Json(serde_json::Error),
     /// The JSON matched a command but its values are not usable.
     Invalid(String),
+    /// A command gave both an `at` target and `x` or `y`.
+    ConflictingPosition {
+        /// Name of the command.
+        command: &'static str,
+    },
 }
 
 impl fmt::Display for CommandParseError {
@@ -318,6 +397,10 @@ impl fmt::Display for CommandParseError {
         match self {
             Self::Json(source) => write!(formatter, "{source}"),
             Self::Invalid(problem) => write!(formatter, "{problem}"),
+            Self::ConflictingPosition { command } => write!(
+                formatter,
+                "{command} takes either `at` or x and y, not both"
+            ),
         }
     }
 }
@@ -326,23 +409,181 @@ impl std::error::Error for CommandParseError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Json(source) => Some(source),
-            Self::Invalid(_) => None,
+            Self::Invalid(_) | Self::ConflictingPosition { .. } => None,
         }
     }
 }
 
+// What `command` needs to say where it points: `at`, or both `x` and `y`. `optional` commands
+// may also give neither.
+fn pointer_position_problem(
+    command: &'static str,
+    x: Option<f32>,
+    y: Option<f32>,
+    has_target: bool,
+    optional: bool,
+) -> Option<CommandParseError> {
+    match (x, y, has_target) {
+        (Some(_), Some(_), false) | (None, None, true) => None,
+        (None, None, false) if optional => None,
+        (_, _, true) => Some(CommandParseError::ConflictingPosition { command }),
+        _ if optional => Some(CommandParseError::Invalid(format!(
+            "{command} needs `at`, both x and y, or neither"
+        ))),
+        _ => Some(CommandParseError::Invalid(format!(
+            "{command} needs `at`, or both x and y"
+        ))),
+    }
+}
+
+fn resolve_pointer<ErrorType>(
+    at: Option<DriverTarget>,
+    x: Option<f32>,
+    y: Option<f32>,
+    resolve: &mut impl FnMut(&DriverTarget) -> Result<Vec2, ErrorType>,
+) -> Result<(Option<f32>, Option<f32>), ErrorType> {
+    match at {
+        Some(target) => {
+            let position = resolve(&target)?;
+            Ok((Some(position.x), Some(position.y)))
+        }
+        None => Ok((x, y)),
+    }
+}
+
+fn resolve_end<ErrorType>(
+    end: PointerPosition,
+    resolve: &mut impl FnMut(&DriverTarget) -> Result<Vec2, ErrorType>,
+) -> Result<PointerPosition, ErrorType> {
+    match end {
+        PointerPosition::Target(target) => {
+            resolve(&target).map(|position| PointerPosition::Pixels(position.to_array()))
+        }
+        pixels @ PointerPosition::Pixels(_) => Ok(pixels),
+    }
+}
+
 impl DriverCommand {
+    /// True when the command still names a game-defined target instead of pixels.
+    #[must_use]
+    pub fn has_targets(&self) -> bool {
+        match self {
+            Self::MouseMove { at, .. } | Self::Click { at, .. } | Self::Touch { at, .. } => {
+                at.is_some()
+            }
+            Self::Drag { from, to, .. } | Self::TouchDrag { from, to, .. } => {
+                matches!(from, PointerPosition::Target(_))
+                    || matches!(to, PointerPosition::Target(_))
+            }
+            _ => false,
+        }
+    }
+
+    /// The command's name as written in scripts, for messages.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::MouseMove { .. } => "mouse_move",
+            Self::Click { .. } => "click",
+            Self::Drag { .. } => "drag",
+            Self::Touch { .. } => "touch",
+            Self::TouchDrag { .. } => "touch_drag",
+            _ => "command",
+        }
+    }
+
+    /// Replaces every target with the pixel position `resolve` returns for it, in reading order
+    /// (`from` before `to`), and stops at the first error.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error `resolve` returns.
+    pub fn resolve_targets<ErrorType>(
+        self,
+        mut resolve: impl FnMut(&DriverTarget) -> Result<Vec2, ErrorType>,
+    ) -> Result<Self, ErrorType> {
+        Ok(match self {
+            Self::MouseMove { x, y, at } => {
+                let (x, y) = resolve_pointer(at, x, y, &mut resolve)?;
+                Self::MouseMove { x, y, at: None }
+            }
+            Self::Click { button, x, y, at } => {
+                let (x, y) = resolve_pointer(at, x, y, &mut resolve)?;
+                Self::Click {
+                    button,
+                    x,
+                    y,
+                    at: None,
+                }
+            }
+            Self::Touch {
+                phase,
+                x,
+                y,
+                at,
+                id,
+            } => {
+                let (x, y) = resolve_pointer(at, x, y, &mut resolve)?;
+                Self::Touch {
+                    phase,
+                    x,
+                    y,
+                    at: None,
+                    id,
+                }
+            }
+            Self::Drag {
+                from,
+                to,
+                button,
+                frames,
+            } => Self::Drag {
+                from: resolve_end(from, &mut resolve)?,
+                to: resolve_end(to, &mut resolve)?,
+                button,
+                frames,
+            },
+            Self::TouchDrag {
+                from,
+                to,
+                id,
+                frames,
+            } => Self::TouchDrag {
+                from: resolve_end(from, &mut resolve)?,
+                to: resolve_end(to, &mut resolve)?,
+                id,
+                frames,
+            },
+            other => other,
+        })
+    }
+
+    fn position_problem(&self) -> Option<CommandParseError> {
+        match self {
+            Self::MouseMove { x, y, at } => {
+                pointer_position_problem("mouse_move", *x, *y, at.is_some(), false)
+            }
+            Self::Touch { x, y, at, .. } => {
+                pointer_position_problem("touch", *x, *y, at.is_some(), false)
+            }
+            Self::Click { x, y, at, .. } => {
+                pointer_position_problem("click", *x, *y, at.is_some(), true)
+            }
+            _ => None,
+        }
+    }
+
     fn validate(self) -> Result<Self, CommandParseError> {
         if let Some(problem) = self.frame_cap_problem() {
             return Err(CommandParseError::Invalid(problem));
+        }
+        if let Some(problem) = self.position_problem() {
+            return Err(problem);
         }
         let problem = match &self {
             Self::KeyTap { hold_frames: 0, .. } => Some("key_tap hold_frames must be at least 1"),
             Self::Drag { frames: 0, .. } | Self::TouchDrag { frames: 0, .. } => {
                 Some("drag frames must be at least 1")
-            }
-            Self::Click { x, y, .. } if x.is_some() != y.is_some() => {
-                Some("click needs both x and y, or neither")
             }
             Self::WaitSeconds { seconds } if !seconds.is_finite() || *seconds < 0.0 => {
                 Some("wait_seconds seconds must be a finite number of at least 0")
@@ -463,7 +704,11 @@ mod tests {
     fn parses_mouse_commands_with_defaults() {
         assert_eq!(
             parse(r#"{"command":"mouse_move","x":1.5,"y":2}"#),
-            DriverCommand::MouseMove { x: 1.5, y: 2.0 }
+            DriverCommand::MouseMove {
+                x: Some(1.5),
+                y: Some(2.0),
+                at: None
+            }
         );
         assert_eq!(
             parse(r#"{"command":"mouse_down"}"#),
@@ -482,14 +727,15 @@ mod tests {
             DriverCommand::Click {
                 button: MouseButton::Middle,
                 x: Some(10.0),
-                y: Some(20.0)
+                y: Some(20.0),
+                at: None
             }
         );
         assert_eq!(
             parse(r#"{"command":"drag","from":[1,2],"to":[3,4]}"#),
             DriverCommand::Drag {
-                from: [1.0, 2.0],
-                to: [3.0, 4.0],
+                from: PointerPosition::Pixels([1.0, 2.0]),
+                to: PointerPosition::Pixels([3.0, 4.0]),
                 button: MouseButton::Left,
                 frames: 10
             }
@@ -518,16 +764,17 @@ mod tests {
             parse(r#"{"command":"touch","phase":"started","x":5,"y":6}"#),
             DriverCommand::Touch {
                 phase: TouchCommandPhase::Started,
-                x: 5.0,
-                y: 6.0,
+                x: Some(5.0),
+                y: Some(6.0),
+                at: None,
                 id: 0
             }
         );
         assert_eq!(
             parse(r#"{"command":"touch_drag","from":[0,0],"to":[9,9],"id":2}"#),
             DriverCommand::TouchDrag {
-                from: [0.0, 0.0],
-                to: [9.0, 9.0],
+                from: PointerPosition::Pixels([0.0, 0.0]),
+                to: PointerPosition::Pixels([9.0, 9.0]),
                 id: 2,
                 frames: 10
             }
@@ -767,6 +1014,157 @@ mod tests {
             assert!(message.contains("at most 100000"), "{message}");
         }
         assert!(parse_command_text(r#"{"command":"wait_frames","frames":100000}"#).is_ok());
+    }
+
+    fn cell_target(column: u32, row: u32) -> DriverTarget {
+        let arguments = serde_json::json!({"column": column, "row": row});
+        DriverTarget {
+            target: "cell".to_owned(),
+            arguments: arguments.as_object().cloned().unwrap_or_default(),
+        }
+    }
+
+    #[test]
+    fn parses_at_on_click_mouse_move_and_touch() {
+        let at = r#""at":{"target":"cell","column":3,"row":5}"#;
+        assert_eq!(
+            parse(&format!(r#"{{"command":"click",{at}}}"#)),
+            DriverCommand::Click {
+                button: MouseButton::Left,
+                x: None,
+                y: None,
+                at: Some(cell_target(3, 5))
+            }
+        );
+        assert_eq!(
+            parse(&format!(r#"{{"command":"mouse_move",{at}}}"#)),
+            DriverCommand::MouseMove {
+                x: None,
+                y: None,
+                at: Some(cell_target(3, 5))
+            }
+        );
+        assert_eq!(
+            parse(&format!(r#"{{"command":"touch","phase":"started",{at}}}"#)),
+            DriverCommand::Touch {
+                phase: TouchCommandPhase::Started,
+                x: None,
+                y: None,
+                at: Some(cell_target(3, 5)),
+                id: 0
+            }
+        );
+    }
+
+    #[test]
+    fn the_target_arguments_exclude_the_target_name() {
+        let command = parse(r#"{"command":"click","at":{"target":"cell","column":3,"row":5}}"#);
+        let DriverCommand::Click { at: Some(at), .. } = command else {
+            panic!("click should carry a target");
+        };
+        assert_eq!(at.target, "cell");
+        assert_eq!(
+            Value::Object(at.arguments),
+            serde_json::json!({"column": 3, "row": 5})
+        );
+    }
+
+    #[test]
+    fn drag_ends_accept_arrays_and_targets_mixed() {
+        assert_eq!(
+            parse(
+                r#"{"command":"drag","from":[1,2],"to":{"target":"cell","column":3,"row":5},"frames":4}"#
+            ),
+            DriverCommand::Drag {
+                from: PointerPosition::Pixels([1.0, 2.0]),
+                to: PointerPosition::Target(cell_target(3, 5)),
+                button: MouseButton::Left,
+                frames: 4
+            }
+        );
+        assert_eq!(
+            parse(
+                r#"{"command":"touch_drag","from":{"target":"cell","column":3,"row":5},"to":[9,9]}"#
+            ),
+            DriverCommand::TouchDrag {
+                from: PointerPosition::Target(cell_target(3, 5)),
+                to: PointerPosition::Pixels([9.0, 9.0]),
+                id: 0,
+                frames: 10
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_unusable_positions() {
+        let conflict = parse_command_text(r#"{"command":"click","x":1,"at":{"target":"cell"}}"#)
+            .expect_err("at with x should fail");
+        assert!(matches!(
+            conflict,
+            CommandParseError::ConflictingPosition { command: "click" }
+        ));
+        assert!(conflict.to_string().contains("not both"), "{conflict}");
+        for text in [
+            r#"{"command":"mouse_move","y":1,"at":{"target":"cell"}}"#,
+            r#"{"command":"touch","phase":"started","x":1,"y":2,"at":{"target":"cell"}}"#,
+            r#"{"command":"mouse_move"}"#,
+            r#"{"command":"mouse_move","x":1}"#,
+            r#"{"command":"touch","phase":"started"}"#,
+            r#"{"command":"click","y":2}"#,
+            r#"{"command":"click","at":{"column":3}}"#,
+            r#"{"command":"drag","from":{"column":3},"to":[1,1]}"#,
+            r#"{"command":"drag","from":"here","to":[1,1]}"#,
+            r#"{"command":"drag","from":[1],"to":[1,1]}"#,
+        ] {
+            assert!(parse_command_text(text).is_err(), "{text}");
+        }
+        let missing_target = parse_command_text(r#"{"command":"click","at":{"column":3}}"#)
+            .expect_err("at without target should fail")
+            .to_string();
+        assert!(missing_target.contains("target"), "{missing_target}");
+        let wrong_type = parse_command_text(r#"{"command":"drag","from":7,"to":[1,1]}"#)
+            .expect_err("a number is not a position")
+            .to_string();
+        assert!(wrong_type.contains("[x, y]"), "{wrong_type}");
+    }
+
+    #[test]
+    fn click_may_have_no_position_at_all() {
+        assert_eq!(
+            parse(r#"{"command":"click"}"#),
+            DriverCommand::Click {
+                button: MouseButton::Left,
+                x: None,
+                y: None,
+                at: None
+            }
+        );
+    }
+
+    #[test]
+    fn resolving_replaces_targets_with_pixels_in_reading_order() {
+        let command = parse(
+            r#"{"command":"drag","from":{"target":"cell","column":1,"row":1},"to":{"target":"cell","column":2,"row":2}}"#,
+        );
+        assert!(command.has_targets());
+        let mut asked = Vec::new();
+        let resolved = command
+            .resolve_targets(|target| -> Result<Vec2, String> {
+                asked.push(target.arguments["column"].as_u64().unwrap_or_default());
+                Ok(Vec2::new(asked.len() as f32, 0.0))
+            })
+            .expect("resolution should succeed");
+        assert_eq!(asked, vec![1, 2]);
+        assert!(!resolved.has_targets());
+        assert_eq!(
+            resolved,
+            DriverCommand::Drag {
+                from: PointerPosition::Pixels([1.0, 0.0]),
+                to: PointerPosition::Pixels([2.0, 0.0]),
+                button: MouseButton::Left,
+                frames: 10
+            }
+        );
     }
 
     #[test]

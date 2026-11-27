@@ -12,6 +12,7 @@ use bevy::{
     },
     prelude::*,
     remote::BrpResult,
+    ui::UiGlobalTransform,
     window::{PrimaryWindow, WindowResolution},
 };
 use bevy_input_driver::{DriverSeed, InputDriverAppExt, InputDriverPlugin};
@@ -71,6 +72,7 @@ fn main() -> AppExit {
         .set_driver_state_handlers(save_demo_state, load_demo_state)
         .add_driver_check("button_is_green", button_is_green)
         .add_driver_check("square_top_left", square_top_left)
+        .add_driver_target("node_center", node_center)
         .add_driver_remote_method("demo/typed_text", typed_text_method)
         .insert_resource(ClearColor(Color::srgb(0.15, 0.15, 0.15)))
         .init_resource::<TypedText>()
@@ -122,6 +124,7 @@ fn spawn_toggle_button(mut commands: Commands) {
             absolute_node(40.0, 40.0, 200.0, 80.0),
             BackgroundColor(DARK_BLUE),
             ToggleButton { is_green: false },
+            Name::new("button"),
         ))
         .observe(toggle_button_color);
 }
@@ -147,6 +150,7 @@ fn spawn_draggable_square(mut commands: Commands) {
             absolute_node(top_left.x, top_left.y, 100.0, 100.0),
             BackgroundColor(ORANGE),
             DraggableSquare { top_left },
+            Name::new("square"),
         ))
         .observe(move_square_with_drag);
 }
@@ -262,6 +266,23 @@ fn square_top_left(
     square: Single<&DraggableSquare>,
 ) -> Result<Value, String> {
     Ok(json!([square.top_left.x, square.top_left.y]))
+}
+
+/// Target `{"target":"node_center","name":"square"}`: the logical center of the named UI node,
+/// read from the layout as it is now, so it follows the node after it moves.
+fn node_center(
+    In(arguments): In<Value>,
+    nodes: Query<(&Name, &UiGlobalTransform, &ComputedNode)>,
+) -> Result<Vec2, String> {
+    let name = arguments
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or("node_center needs a \"name\" string")?;
+    let (_, transform, computed) = nodes
+        .iter()
+        .find(|(node_name, _, _)| node_name.as_str() == name)
+        .ok_or_else(|| format!("no UI node named {name:?}"))?;
+    Ok(transform.translation * computed.inverse_scale_factor())
 }
 
 fn typed_text_method(In(_parameters): In<Option<Value>>, typed: Res<TypedText>) -> BrpResult {

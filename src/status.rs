@@ -99,6 +99,10 @@ pub struct DriverStatus {
     /// Failed `expect` commands over the whole process. Never capped, and `drive/clear` does not
     /// reset it, because a `quit` turns any failure into exit code 1.
     pub checks_failed: u64,
+    /// Commands that named a target the game could not turn into a position, so their input was
+    /// not sent. Never capped, and `drive/clear` does not reset it, because a `quit` turns any
+    /// failure into exit code 1.
+    pub targets_failed: u64,
 }
 
 /// Logs an error and records it in [`DriverStatus`] from code that only has the world.
@@ -133,6 +137,15 @@ impl DriverStatus {
         self.checks.push(result);
         let excess = self.checks.len().saturating_sub(MAXIMUM_RECORDED_CHECKS);
         self.checks.drain(..excess);
+    }
+}
+
+impl DriverStatus {
+    /// Counts a command whose target could not be resolved in [`DriverStatus::targets_failed`]
+    /// and adds `message` to [`DriverStatus::errors`].
+    pub fn note_target_failure(&mut self, message: String) {
+        self.targets_failed += 1;
+        self.record_error(message);
     }
 }
 

@@ -227,24 +227,23 @@ pub fn queue_check(commands: &mut Commands, name: String, arguments: Value, equa
     });
 }
 
-/// The exit a `quit` produces: an error exit when any check has failed, else success.
+/// The exit a `quit` produces: an error exit when any check or target has failed, else success.
 #[must_use]
-pub fn exit_for_failed_checks(checks_failed: u64) -> AppExit {
-    if checks_failed > 0 {
+pub fn exit_for_failures(checks_failed: u64, targets_failed: u64) -> AppExit {
+    if checks_failed > 0 || targets_failed > 0 {
         AppExit::error()
     } else {
         AppExit::Success
     }
 }
 
-/// Queues a world command that exits the app. It reads the failure count only when it runs, so
+/// Queues a world command that exits the app. It reads the failure counts only when it runs, so
 /// an `expect` queued earlier in the same frame is already counted.
 pub fn queue_quit(commands: &mut Commands) {
     commands.queue(|world: &mut World| {
-        let checks_failed = world.resource::<DriverStatus>().checks_failed;
-        world
-            .resource_mut::<Messages<AppExit>>()
-            .write(exit_for_failed_checks(checks_failed));
+        let status = world.resource::<DriverStatus>();
+        let exit = exit_for_failures(status.checks_failed, status.targets_failed);
+        world.resource_mut::<Messages<AppExit>>().write(exit);
     });
 }
 
@@ -472,10 +471,23 @@ mod tests {
     }
 
     #[test]
-    fn failed_checks_choose_the_error_exit() {
-        assert_eq!(exit_for_failed_checks(0), AppExit::Success);
-        assert_eq!(exit_for_failed_checks(1), AppExit::error());
-        assert_eq!(exit_for_failed_checks(u64::MAX), AppExit::error());
+    fn failed_checks_or_targets_choose_the_error_exit() {
+        assert_eq!(exit_for_failures(0, 0), AppExit::Success);
+        assert_eq!(exit_for_failures(1, 0), AppExit::error());
+        assert_eq!(exit_for_failures(u64::MAX, 0), AppExit::error());
+        assert_eq!(exit_for_failures(0, 1), AppExit::error());
+    }
+
+    #[test]
+    fn quit_exits_with_an_error_when_only_a_target_failed() {
+        let mut world = world_with_checks();
+        world.init_resource::<Messages<AppExit>>();
+        world.resource_mut::<DriverStatus>().targets_failed = 1;
+        queue_quit(&mut world.commands());
+        world.flush();
+        let messages = world.resource::<Messages<AppExit>>();
+        let exits: Vec<AppExit> = messages.get_cursor().read(messages).cloned().collect();
+        assert_eq!(exits, vec![AppExit::error()]);
     }
 
     #[test]
