@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use bevy::{log::info, prelude::*};
+use bevy::{app::AppExit, log::info, prelude::*};
 
 use crate::{
     commands::{CommandParseError, DriverCommand, parse_command_text},
@@ -16,6 +16,10 @@ use crate::{
 };
 
 const SCRIPT_ARGUMENT: &str = "--input-script";
+
+/// Exit code when a launch script cannot be used, so the run ends instead of idling. It differs
+/// from code 1 (a failed check or target) so a caller can tell "never started" from "failed".
+pub const SCRIPT_NOT_RUN_EXIT_CODE: u8 = 2;
 
 /// Why a launch script could not be used.
 #[derive(Debug)]
@@ -120,18 +124,19 @@ fn load_script_commands(path: &Path) -> Result<Vec<DriverCommand>, ScriptFileErr
 /// Startup system: loads the launch script, if one is named, and queues its commands.
 ///
 /// The `--input-script` process argument overrides the path set on the plugin. On any error
-/// nothing is queued and the error is recorded in [`DriverStatus::errors`]. A loaded script also
-/// starts blocking real input.
+/// nothing is queued, the error is recorded in [`DriverStatus::errors`], and the app exits with
+/// [`SCRIPT_NOT_RUN_EXIT_CODE`]. A loaded script also starts blocking real input.
 pub fn load_script_file(
     settings: Res<DriverSettings>,
     mut queue: ResMut<DriverQueue>,
     mut status: ResMut<DriverStatus>,
     mut blocking: ResMut<RealInputBlocking>,
+    mut exits: MessageWriter<AppExit>,
 ) {
     let from_arguments = match script_path_from_arguments(std::env::args().skip(1)) {
         Ok(path) => path,
         Err(problem) => {
-            status.record_error(problem.to_string());
+            fail_script_run(&problem, &mut status, &mut exits);
             return;
         }
     };
@@ -144,8 +149,19 @@ pub fn load_script_file(
             blocking.block_for_first_command();
             status.script_loaded = Some(path.display().to_string());
         }
-        Err(problem) => status.record_error(problem.to_string()),
+        Err(problem) => fail_script_run(&problem, &mut status, &mut exits),
     }
+}
+
+fn fail_script_run(
+    problem: &ScriptFileError,
+    status: &mut DriverStatus,
+    exits: &mut MessageWriter<AppExit>,
+) {
+    status.record_error(format!(
+        "{problem}; exiting with code {SCRIPT_NOT_RUN_EXIT_CODE}"
+    ));
+    exits.write(AppExit::from_code(SCRIPT_NOT_RUN_EXIT_CODE));
 }
 
 /// Startup system: logs the listening address and whether a script was loaded.
@@ -168,6 +184,79 @@ mod tests {
 
     fn arguments(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    fn run_loader_with_plugin_script(script_path: PathBuf) -> World {
+        let mut world = World::new();
+        world.insert_resource(DriverSettings {
+            port: 0,
+            enable_remote: false,
+            script_path: Some(script_path),
+            update_window_cursor_position: false,
+            off_screen_for_scripts: false,
+        });
+        world.init_resource::<DriverQueue>();
+        world.init_resource::<DriverStatus>();
+        world.init_resource::<RealInputBlocking>();
+        world.init_resource::<Messages<AppExit>>();
+        world
+            .run_system_cached(load_script_file)
+            .expect("loader system should run");
+        world
+    }
+
+    fn written_exits(world: &World) -> Vec<AppExit> {
+        let messages = world.resource::<Messages<AppExit>>();
+        messages.get_cursor().read(messages).cloned().collect()
+    }
+
+    #[test]
+    fn missing_script_file_exits_with_the_script_not_run_code() {
+        let world = run_loader_with_plugin_script(PathBuf::from("no_such_directory/missing.jsonl"));
+        assert_eq!(
+            written_exits(&world),
+            vec![AppExit::from_code(SCRIPT_NOT_RUN_EXIT_CODE)]
+        );
+        let status = world.resource::<DriverStatus>();
+        assert!(status.script_loaded.is_none());
+        assert!(
+            status
+                .errors
+                .iter()
+                .any(|message| message.contains("cannot read file")),
+            "{:?}",
+            status.errors
+        );
+        assert_eq!(world.resource::<DriverQueue>().step_count(), 0);
+    }
+
+    #[test]
+    fn script_with_a_bad_line_exits_with_the_script_not_run_code() {
+        let script_path = std::env::temp_dir().join(format!(
+            "bevy_input_driver_bad_line_{}.jsonl",
+            std::process::id()
+        ));
+        fs::write(
+            &script_path,
+            "{\"command\":\"bogus\"}
+",
+        )
+        .expect("temp script should write");
+        let world = run_loader_with_plugin_script(script_path.clone());
+        let _ = fs::remove_file(&script_path);
+        assert_eq!(
+            written_exits(&world),
+            vec![AppExit::from_code(SCRIPT_NOT_RUN_EXIT_CODE)]
+        );
+    }
+
+    #[test]
+    fn script_not_run_code_differs_from_the_failed_check_code() {
+        assert_ne!(
+            AppExit::from_code(SCRIPT_NOT_RUN_EXIT_CODE),
+            AppExit::error()
+        );
+        assert!(AppExit::from_code(SCRIPT_NOT_RUN_EXIT_CODE).is_error());
     }
 
     #[test]

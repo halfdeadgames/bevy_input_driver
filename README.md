@@ -96,7 +96,7 @@ Use `--port N` before the action for a non-default port. Exit codes: 0 on succes
 
 ## Launch file
 
-A JSON Lines file with one command per line. Blank lines and lines starting with `//` or `#` are skipped. The whole file is parsed first: on any error nothing is queued, and the file name, line number, and problem are logged and recorded in `drive/status` under `errors`.
+A JSON Lines file with one command per line. Blank lines and lines starting with `//` or `#` are skipped. The whole file is parsed first. If the file can't be read, a line is not a valid command, or `--input-script` has no path after it, nothing is queued. The problem, with the file name and line number where they apply, is logged and recorded in `drive/status` under `errors`, and the game exits with code 2. A mistyped path ends the run instead of leaving the game idle. Code 2 tells a test runner the script never ran. Code 1 means it ran and a check failed.
 
 ```text
 cargo run -- --input-script tests/smoke.jsonl
