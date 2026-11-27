@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 use std::iter::repeat_n;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use bevy::{
@@ -16,7 +17,10 @@ use bevy::{
 use serde_json::Value;
 
 use crate::{
+    clipboard_injection::ClipboardAction,
     commands::{DriverCommand, PointerPosition, ScrollUnit, TouchCommandPhase},
+    gamepad_injection::{GamepadAction, GamepadSlot},
+    injection::{FileDragAction, ImeAction},
     state_handlers::StateOperation,
     time_control::TimeControlAction,
     window_control::WindowAction,
@@ -154,13 +158,31 @@ pub enum DriverStep {
     },
     /// Double tap gesture.
     DoubleTap,
+    /// Change a fake gamepad.
+    Gamepad {
+        /// Slot of the gamepad.
+        slot: GamepadSlot,
+        /// What to change.
+        action: GamepadAction,
+    },
     /// Capture the primary window.
     Screenshot {
         /// Output path.
         path: String,
     },
-    /// Ask for the primary window to be minimized or restored.
+    /// Ask for the primary window to be minimized, restored, or resized.
     Window(WindowAction),
+    /// Report that the primary window gained or lost focus.
+    Focus {
+        /// True when the window gained focus.
+        focused: bool,
+    },
+    /// Report a file hover, drop, or hover cancel.
+    FileDrag(FileDragAction),
+    /// Report an input method editor event.
+    Ime(ImeAction),
+    /// Change the real clipboard.
+    Clipboard(ClipboardAction),
     /// Block or allow real input.
     RealInput {
         /// True to block real input.
@@ -222,6 +244,12 @@ fn then_end_frame(step: DriverStep) -> Vec<DriverStep> {
 fn with_picking_barrier(mut steps: Vec<DriverStep>) -> Vec<DriverStep> {
     steps.push(DriverStep::EndFrame);
     steps
+}
+
+// Connecting must end the frame because `Gamepad` is inserted through commands, so a button
+// written in the same frame would be ignored. The others end it like key presses do.
+fn gamepad_steps(slot: GamepadSlot, action: GamepadAction) -> Vec<DriverStep> {
+    then_end_frame(DriverStep::Gamepad { slot, action })
 }
 
 fn bevy_touch_phase(phase: TouchCommandPhase) -> TouchPhase {
@@ -386,6 +414,34 @@ pub fn expand_command(command: &DriverCommand) -> Vec<DriverStep> {
             delta: Vec2::new(*x, *y),
         }),
         DriverCommand::DoubleTap {} => then_end_frame(DriverStep::DoubleTap),
+        DriverCommand::GamepadConnect { gamepad } => {
+            gamepad_steps(*gamepad, GamepadAction::Connect)
+        }
+        DriverCommand::GamepadDisconnect { gamepad } => {
+            gamepad_steps(*gamepad, GamepadAction::Disconnect)
+        }
+        DriverCommand::GamepadSetButton {
+            gamepad,
+            button,
+            value,
+        } => gamepad_steps(
+            *gamepad,
+            GamepadAction::Button {
+                button: *button,
+                value: *value,
+            },
+        ),
+        DriverCommand::GamepadSetAxis {
+            gamepad,
+            axis,
+            value,
+        } => gamepad_steps(
+            *gamepad,
+            GamepadAction::Axis {
+                axis: *axis,
+                value: *value,
+            },
+        ),
         DriverCommand::WaitFrames { frames } => vec![DriverStep::WaitFrames(*frames)],
         DriverCommand::WaitSeconds { seconds } => vec![DriverStep::WaitSeconds(*seconds)],
         // The barrier gives the game one more frame, so the first frame drawn with every
@@ -405,6 +461,39 @@ pub fn expand_command(command: &DriverCommand) -> Vec<DriverStep> {
         }
         DriverCommand::WindowRestore {} => {
             then_end_frame(DriverStep::Window(WindowAction::Restore))
+        }
+        DriverCommand::Resize { width, height } => {
+            then_end_frame(DriverStep::Window(WindowAction::Resize {
+                width: *width,
+                height: *height,
+            }))
+        }
+        DriverCommand::Focus { focused } => then_end_frame(DriverStep::Focus { focused: *focused }),
+        DriverCommand::FileHover { path } => then_end_frame(DriverStep::FileDrag(
+            FileDragAction::Hover(PathBuf::from(path)),
+        )),
+        DriverCommand::FileDrop { path } => then_end_frame(DriverStep::FileDrag(
+            FileDragAction::Drop(PathBuf::from(path)),
+        )),
+        DriverCommand::FileHoverCancel {} => {
+            then_end_frame(DriverStep::FileDrag(FileDragAction::HoverCancel))
+        }
+        DriverCommand::ImeEnable {} => then_end_frame(DriverStep::Ime(ImeAction::Enable)),
+        DriverCommand::ImePreedit { text, cursor } => {
+            then_end_frame(DriverStep::Ime(ImeAction::Preedit {
+                value: text.clone(),
+                cursor: cursor.map(|[start, end]| (start, end)),
+            }))
+        }
+        DriverCommand::ImeCommit { text } => {
+            then_end_frame(DriverStep::Ime(ImeAction::Commit(text.clone())))
+        }
+        DriverCommand::ImeDisable {} => then_end_frame(DriverStep::Ime(ImeAction::Disable)),
+        DriverCommand::ClipboardSet { text } => {
+            then_end_frame(DriverStep::Clipboard(ClipboardAction::Set(text.clone())))
+        }
+        DriverCommand::ClipboardRestore {} => {
+            then_end_frame(DriverStep::Clipboard(ClipboardAction::Restore))
         }
         DriverCommand::RealInput { blocked } => {
             then_end_frame(DriverStep::RealInput { blocked: *blocked })
@@ -838,6 +927,62 @@ mod tests {
             expand(r#"{"command":"window_restore"}"#),
             vec![
                 DriverStep::Window(WindowAction::Restore),
+                DriverStep::EndFrame
+            ]
+        );
+    }
+
+    #[test]
+    fn window_event_commands_end_with_a_barrier() {
+        assert_eq!(
+            expand(r#"{"command":"focus","focused":true}"#),
+            vec![DriverStep::Focus { focused: true }, DriverStep::EndFrame]
+        );
+        assert_eq!(
+            expand(r#"{"command":"resize","width":800,"height":600}"#),
+            vec![
+                DriverStep::Window(WindowAction::Resize {
+                    width: 800.0,
+                    height: 600.0
+                }),
+                DriverStep::EndFrame
+            ]
+        );
+        assert_eq!(
+            expand(r#"{"command":"file_drop","path":"a b/c.txt"}"#),
+            vec![
+                DriverStep::FileDrag(FileDragAction::Drop(PathBuf::from("a b/c.txt"))),
+                DriverStep::EndFrame
+            ]
+        );
+        assert_eq!(
+            expand(r#"{"command":"ime_preedit","text":"に","cursor":[0,3]}"#),
+            vec![
+                DriverStep::Ime(ImeAction::Preedit {
+                    value: "に".to_owned(),
+                    cursor: Some((0, 3))
+                }),
+                DriverStep::EndFrame
+            ]
+        );
+        assert_eq!(
+            expand(r#"{"command":"clipboard_set","text":"hi"}"#),
+            vec![
+                DriverStep::Clipboard(ClipboardAction::Set("hi".to_owned())),
+                DriverStep::EndFrame
+            ]
+        );
+    }
+
+    #[test]
+    fn gamepad_commands_end_with_a_barrier() {
+        assert_eq!(
+            expand(r#"{"command":"gamepad_connect","gamepad":2}"#),
+            vec![
+                DriverStep::Gamepad {
+                    slot: GamepadSlot(2),
+                    action: GamepadAction::Connect
+                },
                 DriverStep::EndFrame
             ]
         );

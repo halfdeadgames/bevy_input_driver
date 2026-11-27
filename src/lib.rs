@@ -27,8 +27,10 @@
 #![warn(missing_docs)]
 
 pub mod checks;
+pub mod clipboard_injection;
 pub mod commands;
 pub mod executor;
+pub mod gamepad_injection;
 pub mod injection;
 pub mod plugin;
 pub mod real_input;
@@ -46,7 +48,9 @@ pub mod window_control;
 
 pub use checks::{CheckResult, DriverChecks};
 pub use commands::{CommandParseError, DriverCommand, DriverTarget, PointerPosition};
+pub use gamepad_injection::{DriverGamepads, GamepadSlot};
 pub use plugin::InputDriverPlugin;
+pub use real_input::DriverGamepad;
 pub use render_readiness::{FailedPipeline, RenderReadiness};
 pub use seed::DriverSeed;
 pub use state_handlers::{DriverStateHandlers, InputDriverAppExt};

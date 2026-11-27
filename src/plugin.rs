@@ -6,7 +6,10 @@ use bevy::{prelude::*, remote::http::DEFAULT_PORT};
 
 use crate::{
     checks::DriverChecksPlugin,
+    clipboard_injection::DriverClipboardPlugin,
     executor::DriverExecutorPlugin,
+    gamepad_injection::DriverGamepadPlugin,
+    injection::DriverWindowEventPlugin,
     real_input::{DriverRealInputPlugin, place_window_off_screen_for_scripts},
     remote::DriverRemotePlugin,
     render_readiness::DriverRenderReadinessPlugin,
@@ -85,6 +88,9 @@ impl Plugin for InputDriverPlugin {
         })
         .add_plugins((
             DriverRealInputPlugin,
+            DriverGamepadPlugin,
+            DriverWindowEventPlugin,
+            DriverClipboardPlugin,
             DriverExecutorPlugin,
             DriverSeedPlugin { seed: self.seed },
             DriverTimeControlPlugin,

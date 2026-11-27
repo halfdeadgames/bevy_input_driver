@@ -222,8 +222,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        commands::parse_command_text, executor::execute_driver_steps, plugin::DriverSettings,
-        real_input::RealInputBlocking,
+        commands::parse_command_text, executor::execute_driver_steps,
+        gamepad_injection::DriverGamepadPlugin, injection::DriverWindowEventPlugin,
+        plugin::DriverSettings, real_input::RealInputBlocking,
     };
 
     fn cell_position(In(arguments): In<Value>) -> Result<Vec2, String> {
@@ -269,6 +270,7 @@ mod tests {
             .add_message::<PanGesture>()
             .add_message::<DoubleTapGesture>()
             .add_message::<WindowEvent>()
+            .add_plugins((DriverGamepadPlugin, DriverWindowEventPlugin))
             .insert_resource(DriverSettings {
                 port: 0,
                 enable_remote: false,

@@ -6,9 +6,14 @@ use std::path::Path;
 use bevy::{
     ecs::{
         message::{MessageUpdateSystems, Messages},
-        system::SystemParam,
+        system::{NonSendMarker, SystemParam},
     },
     input::{
+        gamepad::{
+            Gamepad, GamepadConnectionEvent, GamepadInput, RawGamepadAxisChangedEvent,
+            RawGamepadButtonChangedEvent, RawGamepadEvent, gamepad_connection_system,
+            gamepad_event_processing_system,
+        },
         gestures::{DoubleTapGesture, PanGesture, PinchGesture, RotationGesture},
         keyboard::KeyboardInput,
         mouse::{MouseButtonInput, MouseMotion, MouseWheel},
@@ -17,8 +22,9 @@ use bevy::{
     log::info,
     math::IVec2,
     prelude::*,
-    window::{CursorMoved, CursorOptions, PrimaryWindow, WindowPosition},
+    window::{CursorMoved, CursorOptions, FileDragAndDrop, Ime, PrimaryWindow, WindowPosition},
 };
+use bevy_winit::WINIT_WINDOWS;
 
 use crate::{script_file::script_path_from_arguments, status::DriverStatus};
 
@@ -65,9 +71,9 @@ impl RealInputBlocking {
     }
 }
 
-/// Every typed input message the driver injects and bevy_input reads.
+/// Typed input messages that only arrive while the operating system window has focus.
 #[derive(SystemParam)]
-struct TypedInputMessages<'w> {
+struct FocusDependentMessages<'w> {
     keyboard: ResMut<'w, Messages<KeyboardInput>>,
     mouse_button: ResMut<'w, Messages<MouseButtonInput>>,
     mouse_wheel: ResMut<'w, Messages<MouseWheel>>,
@@ -80,7 +86,7 @@ struct TypedInputMessages<'w> {
     double_tap: ResMut<'w, Messages<DoubleTapGesture>>,
 }
 
-impl TypedInputMessages<'_> {
+impl FocusDependentMessages<'_> {
     fn clear_all(&mut self) {
         self.keyboard.clear();
         self.mouse_button.clear();
@@ -95,17 +101,71 @@ impl TypedInputMessages<'_> {
     }
 }
 
+/// Typed messages the operating system sends whatever the window focus, so a drag over the
+/// window or an input method editor reaches the game even while it is unfocused.
+#[derive(SystemParam)]
+struct FocusIndependentMessages<'w> {
+    ime: ResMut<'w, Messages<Ime>>,
+    file_drag_and_drop: ResMut<'w, Messages<FileDragAndDrop>>,
+}
+
+impl FocusIndependentMessages<'_> {
+    fn clear_all(&mut self) {
+        self.ime.clear();
+        self.file_drag_and_drop.clear();
+    }
+}
+
+/// Marks a gamepad entity the driver owns, so blocking real input leaves its `Gamepad` alone.
+#[derive(Component, Debug, Default, Clone, Copy)]
+pub struct DriverGamepad;
+
+// Holds the removed `Gamepad` itself, because its vendor and product ids cannot be set outside
+// bevy_input. Restoring the same value also keeps the device's settings and state.
+#[derive(Component)]
+struct HiddenRealGamepad(Gamepad);
+
 fn real_input_is_blocked(blocking: Res<RealInputBlocking>) -> bool {
     blocking.is_blocked()
 }
 
-// Real messages are written before `First`, injected ones in `PreUpdate`, and every reader of
-// them (bevy_input, the bevy_input_focus dispatch after `InputSystems`, bevy_picking's touch
-// cleanup in `Last`) runs in the frame of the injection, so dropping everything at the start of
-// the next frame removes only real input. `Messages::clear` keeps the message count, so reader
-// cursors stay valid. It runs after the buffer swap so both buffers are emptied in one pass.
-// `WindowEvent` is left alone because `bevy_picking` reads last frame's injected ones in `First`.
-fn clear_real_input_messages(mut messages: TypedInputMessages) {
+/// Whether clearing is needed, given winit's answer for the primary window. With no answer
+/// (tests, headless apps) clearing stays on.
+fn should_clear_for_focus(operating_system_focus: Option<bool>) -> bool {
+    operating_system_focus.unwrap_or(true)
+}
+
+// Asks winit instead of `Window::focused` so injected focus messages cannot switch clearing.
+// `NonSendMarker` keeps this on the main thread, the only thread whose `WINIT_WINDOWS` is filled.
+fn primary_window_has_operating_system_focus(
+    primary_window: Query<Entity, With<PrimaryWindow>>,
+    _main_thread: NonSendMarker,
+) -> bool {
+    let focus = primary_window.single().ok().and_then(|entity| {
+        WINIT_WINDOWS.with_borrow(|winit_windows| {
+            winit_windows
+                .get_window(entity)
+                .map(|window| window.has_focus())
+        })
+    });
+    should_clear_for_focus(focus)
+}
+
+// `Messages` cannot drop single messages, so every typed message goes. Real keyboard input only
+// arrives while the operating system window has focus and real pointer input is routed away by
+// `hit_test`, so clearing those runs only then; that spares injected messages otherwise. Ime and
+// file drag messages do not depend on keyboard focus, so `clear_focus_independent_messages`
+// clears them whenever input is blocked. Real
+// messages are written before `First`, injected ones in `PreUpdate`, and their readers run in
+// the injection frame, so dropping everything at the start of the next frame removes only real
+// input. `Messages::clear` keeps the message count, so reader cursors stay valid. It runs after
+// the buffer swap so both buffers are emptied in one pass. `WindowEvent` is left alone because
+// `bevy_picking` reads last frame's injected ones in `First`.
+fn clear_real_input_messages(mut messages: FocusDependentMessages) {
+    messages.clear_all();
+}
+
+fn clear_focus_independent_messages(mut messages: FocusIndependentMessages) {
     messages.clear_all();
 }
 
@@ -119,6 +179,91 @@ fn apply_cursor_hit_test(
     for mut options in &mut cursor_options {
         if options.hit_test != hit_test {
             options.hit_test = hit_test;
+        }
+    }
+}
+
+// bevy_gilrs writes real gamepad events in `PreUpdate` whatever the window focus, and bevy_input
+// ignores events for entities without `Gamepad`. Hiding runs between connection handling and
+// event processing, so a pad that connects while blocked is hidden the same frame. Exclusive
+// access applies the change immediately, so no sync point is needed.
+type RealGamepadFilter = (With<Gamepad>, Without<DriverGamepad>);
+
+fn hide_real_gamepads_while_blocked(
+    world: &mut World,
+    mut real_gamepads: Local<QueryState<Entity, RealGamepadFilter>>,
+) {
+    let entities: Vec<Entity> = real_gamepads.iter(world).collect();
+    for entity in &entities {
+        let mut entity_mut = world.entity_mut(*entity);
+        if let Some(gamepad) = entity_mut.take::<Gamepad>() {
+            entity_mut.insert(HiddenRealGamepad(gamepad));
+        }
+    }
+    if !entities.is_empty() {
+        info!("input driver: hid {} real gamepad(s)", entities.len());
+    }
+}
+
+// The device may have been moved while hidden, and the stored `Gamepad` still holds the values
+// from before, so every nonzero input is zeroed. The device reports fresh values on its next
+// change.
+fn zero_events_for_held_inputs(entity: Entity, gamepad: &Gamepad) -> Vec<RawGamepadEvent> {
+    gamepad
+        .get_analog_axes()
+        .filter(|input| {
+            gamepad
+                .get_unclamped(**input)
+                .is_some_and(|value| value != 0.0)
+        })
+        .map(|input| match input {
+            GamepadInput::Button(button) => {
+                RawGamepadEvent::Button(RawGamepadButtonChangedEvent::new(entity, *button, 0.0))
+            }
+            GamepadInput::Axis(axis) => {
+                RawGamepadEvent::Axis(RawGamepadAxisChangedEvent::new(entity, *axis, 0.0))
+            }
+        })
+        .collect()
+}
+
+fn restore_gamepad(world: &mut World, entity: Entity) -> Vec<RawGamepadEvent> {
+    let mut entity_mut = world.entity_mut(entity);
+    let Some(HiddenRealGamepad(gamepad)) = entity_mut.take::<HiddenRealGamepad>() else {
+        return Vec::new();
+    };
+    let events = zero_events_for_held_inputs(entity, &gamepad);
+    entity_mut.insert(gamepad);
+    events
+}
+
+fn restore_real_gamepads_when_unblocked(
+    world: &mut World,
+    mut hidden_gamepads: Local<QueryState<Entity, With<HiddenRealGamepad>>>,
+) {
+    let entities: Vec<Entity> = hidden_gamepads.iter(world).collect();
+    for entity in &entities {
+        let events = restore_gamepad(world, *entity);
+        let mut messages = world.resource_mut::<Messages<RawGamepadEvent>>();
+        for event in events {
+            messages.write(event);
+        }
+    }
+    if !entities.is_empty() {
+        info!("input driver: restored {} real gamepad(s)", entities.len());
+    }
+}
+
+// A device that disconnected while hidden must not come back.
+fn forget_disconnected_hidden_gamepads(
+    mut connection_events: MessageReader<GamepadConnectionEvent>,
+    mut commands: Commands,
+) {
+    for event in connection_events.read() {
+        if event.disconnected() {
+            commands
+                .entity(event.gamepad)
+                .try_remove::<HiddenRealGamepad>();
         }
     }
 }
@@ -197,15 +342,32 @@ impl Plugin for DriverRealInputPlugin {
             .add_message::<RotationGesture>()
             .add_message::<PanGesture>()
             .add_message::<DoubleTapGesture>()
+            .add_message::<Ime>()
+            .add_message::<FileDragAndDrop>()
+            .add_message::<GamepadConnectionEvent>()
+            .add_message::<RawGamepadEvent>()
             .add_systems(
                 First,
-                clear_real_input_messages
+                (
+                    clear_real_input_messages.run_if(primary_window_has_operating_system_focus),
+                    clear_focus_independent_messages,
+                )
                     .after(MessageUpdateSystems)
                     .run_if(real_input_is_blocked),
             )
             .add_systems(
                 PreUpdate,
                 (
+                    forget_disconnected_hidden_gamepads,
+                    hide_real_gamepads_while_blocked
+                        .run_if(real_input_is_blocked)
+                        .after(forget_disconnected_hidden_gamepads)
+                        .after(gamepad_connection_system)
+                        .before(gamepad_event_processing_system),
+                    restore_real_gamepads_when_unblocked
+                        .run_if(not(real_input_is_blocked))
+                        .after(forget_disconnected_hidden_gamepads)
+                        .before(gamepad_event_processing_system),
                     copy_blocking_into_status,
                     apply_cursor_hit_test.run_if(resource_changed::<RealInputBlocking>),
                 ),
@@ -218,6 +380,10 @@ mod tests {
     use super::*;
     use bevy::input::{
         ButtonState,
+        gamepad::{
+            GamepadButton, GamepadButtonStateChangedEvent, GamepadConnection,
+            RawGamepadButtonChangedEvent, RawGamepadEvent,
+        },
         keyboard::{Key, KeyCode},
     };
 
@@ -263,6 +429,148 @@ mod tests {
         write_keyboard_and_motion(&mut app);
         app.update();
         assert_eq!(pending_counts(&app), (0, 0));
+    }
+
+    #[test]
+    fn clearing_follows_the_operating_system_focus() {
+        assert!(should_clear_for_focus(None));
+        assert!(should_clear_for_focus(Some(true)));
+        assert!(!should_clear_for_focus(Some(false)));
+    }
+
+    fn app_with_gamepad_input() -> App {
+        let mut app = App::new();
+        app.add_plugins((bevy::input::InputPlugin, DriverRealInputPlugin));
+        app
+    }
+
+    fn connect_gamepad(app: &mut App) -> Entity {
+        let entity = app.world_mut().spawn_empty().id();
+        app.world_mut().write_message(GamepadConnectionEvent::new(
+            entity,
+            GamepadConnection::Connected {
+                name: "test pad".into(),
+                vendor_id: Some(1),
+                product_id: Some(2),
+            },
+        ));
+        app.update();
+        entity
+    }
+
+    fn press_south(app: &mut App, entity: Entity) {
+        app.world_mut()
+            .write_message(RawGamepadEvent::Button(RawGamepadButtonChangedEvent::new(
+                entity,
+                GamepadButton::South,
+                1.0,
+            )));
+    }
+
+    fn state_change_count(app: &App) -> usize {
+        app.world()
+            .resource::<Messages<GamepadButtonStateChangedEvent>>()
+            .len()
+    }
+
+    #[test]
+    fn real_gamepads_are_hidden_while_blocked_and_restored_after() {
+        let mut app = app_with_gamepad_input();
+        let entity = connect_gamepad(&mut app);
+        assert!(app.world().get::<Gamepad>(entity).is_some());
+
+        app.world_mut()
+            .resource_mut::<RealInputBlocking>()
+            .set_blocked(true);
+        press_south(&mut app, entity);
+        app.update();
+        assert!(app.world().get::<Gamepad>(entity).is_none());
+        assert_eq!(state_change_count(&app), 0);
+
+        app.world_mut()
+            .resource_mut::<RealInputBlocking>()
+            .set_blocked(false);
+        app.update();
+        let restored = app.world().get::<Gamepad>(entity);
+        assert_eq!(
+            restored.map(|gamepad| (gamepad.vendor_id(), gamepad.product_id())),
+            Some((Some(1), Some(2)))
+        );
+    }
+
+    #[test]
+    fn a_button_held_while_hiding_reads_released_after_restore() {
+        let mut app = app_with_gamepad_input();
+        let entity = connect_gamepad(&mut app);
+        press_south(&mut app, entity);
+        app.update();
+        let pressed = |app: &App| {
+            app.world()
+                .get::<Gamepad>(entity)
+                .map(|gamepad| gamepad.pressed(GamepadButton::South))
+        };
+        assert_eq!(pressed(&app), Some(true));
+
+        app.world_mut()
+            .resource_mut::<RealInputBlocking>()
+            .set_blocked(true);
+        app.update();
+        assert!(app.world().get::<Gamepad>(entity).is_none());
+
+        app.world_mut()
+            .resource_mut::<RealInputBlocking>()
+            .set_blocked(false);
+        app.update();
+        assert_eq!(pressed(&app), Some(false));
+    }
+
+    #[test]
+    fn ime_and_file_messages_are_cleared_while_blocked() {
+        let mut app = app_with_real_input();
+        app.world_mut().write_message(Ime::Disabled {
+            window: Entity::PLACEHOLDER,
+        });
+        app.world_mut()
+            .resource_mut::<RealInputBlocking>()
+            .set_blocked(true);
+        app.update();
+        assert_eq!(app.world().resource::<Messages<Ime>>().len(), 0);
+    }
+
+    #[test]
+    fn a_gamepad_that_disconnects_while_hidden_is_not_restored() {
+        let mut app = app_with_gamepad_input();
+        let entity = connect_gamepad(&mut app);
+        app.world_mut()
+            .resource_mut::<RealInputBlocking>()
+            .set_blocked(true);
+        app.update();
+        app.world_mut().write_message(GamepadConnectionEvent::new(
+            entity,
+            GamepadConnection::Disconnected,
+        ));
+        app.update();
+        app.world_mut()
+            .resource_mut::<RealInputBlocking>()
+            .set_blocked(false);
+        app.update();
+        assert!(app.world().get::<Gamepad>(entity).is_none());
+    }
+
+    #[test]
+    fn driver_gamepads_keep_their_gamepad_while_blocked() {
+        let mut app = app_with_gamepad_input();
+        let entity = app
+            .world_mut()
+            .spawn((Gamepad::default(), DriverGamepad))
+            .id();
+        app.world_mut()
+            .resource_mut::<RealInputBlocking>()
+            .set_blocked(true);
+        press_south(&mut app, entity);
+        app.update();
+        assert!(app.world().get::<Gamepad>(entity).is_some());
+        assert_eq!(state_change_count(&app), 1);
     }
 
     fn hit_test_of(app: &App, window: Entity) -> Option<bool> {

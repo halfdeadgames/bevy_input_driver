@@ -1,16 +1,23 @@
-//! Asking Bevy to minimize or restore the primary window.
+//! Asking Bevy to minimize, restore, or resize the primary window.
 
 use bevy::{ecs::query::QuerySingleError, prelude::*, window::PrimaryWindow};
 
 use crate::status::record_error_in_world;
 
 /// What to ask of the primary window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WindowAction {
     /// Ask for the window to be minimized.
     Minimize,
     /// Ask for the window to be restored from minimized.
     Restore,
+    /// Ask for the window to be resized, so winit resizes the operating system window.
+    Resize {
+        /// Logical width.
+        width: f32,
+        /// Logical height.
+        height: f32,
+    },
 }
 
 impl WindowAction {
@@ -18,16 +25,21 @@ impl WindowAction {
         match self {
             Self::Minimize => "window_minimize",
             Self::Restore => "window_restore",
+            Self::Resize { .. } => "resize",
         }
     }
 
-    fn wants_minimized(self) -> bool {
-        self == Self::Minimize
+    fn apply_to(self, window: &mut Window) {
+        match self {
+            Self::Minimize => window.set_minimized(true),
+            Self::Restore => window.set_minimized(false),
+            Self::Resize { width, height } => window.resolution.set(width, height),
+        }
     }
 }
 
-/// Queues a world command that sets the minimize request on the primary window. It only
-/// requests the change; the operating system may apply it later or not at all.
+/// Queues a world command that changes the primary window. It only requests the change; the
+/// operating system may apply it later or not at all.
 pub fn queue_window_action(commands: &mut Commands, action: WindowAction) {
     commands.queue(move |world: &mut World| apply_window_action(world, action));
 }
@@ -36,7 +48,7 @@ fn apply_window_action(world: &mut World, action: WindowAction) {
     let mut primary_windows = world.query_filtered::<&mut Window, With<PrimaryWindow>>();
     let problem = match primary_windows.single_mut(world) {
         Ok(mut window) => {
-            window.set_minimized(action.wants_minimized());
+            action.apply_to(&mut window);
             return;
         }
         Err(QuerySingleError::NoEntities(_)) => "no primary window",
@@ -78,6 +90,43 @@ mod tests {
             .take_minimize_request();
         assert_eq!(request, Some(false));
         assert!(world.resource::<DriverStatus>().errors.is_empty());
+    }
+
+    #[test]
+    fn resize_sets_the_logical_size() {
+        let mut world = world_with_status();
+        let window = world.spawn((Window::default(), PrimaryWindow)).id();
+
+        apply_window_action(
+            &mut world,
+            WindowAction::Resize {
+                width: 800.0,
+                height: 600.0,
+            },
+        );
+
+        let resolution = &world
+            .get::<Window>(window)
+            .expect("window exists")
+            .resolution;
+        assert_eq!((resolution.width(), resolution.height()), (800.0, 600.0));
+        assert!(world.resource::<DriverStatus>().errors.is_empty());
+    }
+
+    #[test]
+    fn resize_without_a_primary_window_records_an_error() {
+        let mut world = world_with_status();
+        apply_window_action(
+            &mut world,
+            WindowAction::Resize {
+                width: 800.0,
+                height: 600.0,
+            },
+        );
+        assert_eq!(
+            world.resource::<DriverStatus>().errors,
+            vec!["resize: no primary window".to_owned()]
+        );
     }
 
     #[test]

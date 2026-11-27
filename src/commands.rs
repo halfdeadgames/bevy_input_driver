@@ -3,13 +3,20 @@
 use std::fmt;
 
 use bevy::{
-    input::{keyboard::KeyCode, mouse::MouseButton},
+    input::{
+        gamepad::{GamepadAxis, GamepadButton},
+        keyboard::KeyCode,
+        mouse::MouseButton,
+    },
     math::Vec2,
 };
 use serde::{Deserialize, de::Error as _};
 use serde_json::{Map, Value};
 
-use crate::render_readiness::SETTLED_RENDER_FRAMES;
+use crate::{
+    gamepad_injection::{GamepadSlot, deserialize_gamepad_axis, deserialize_gamepad_button},
+    render_readiness::SETTLED_RENDER_FRAMES,
+};
 
 /// A position in logical pixels in the primary window, origin top left.
 pub type LogicalPoint = [f32; 2];
@@ -82,6 +89,8 @@ pub const DEFAULT_DRAWN_TIMEOUT_SECONDS: f32 = 60.0;
 pub const MAXIMUM_DRAWN_TIMEOUT_SECONDS: f32 = 3600.0;
 /// Largest `settle_frames` a `wait_until_drawn` command may use.
 pub const MAXIMUM_DRAWN_SETTLE_FRAMES: u32 = 600;
+/// Largest `width` or `height`, in logical pixels, a `resize` command may use.
+pub const MAXIMUM_WINDOW_SIZE: f32 = 16384.0;
 
 fn default_hold_frames() -> u32 {
     DEFAULT_TAP_HOLD_FRAMES
@@ -274,6 +283,38 @@ pub enum DriverCommand {
     },
     /// Double tap gesture.
     DoubleTap {},
+    /// Connect a fake gamepad in a slot.
+    GamepadConnect {
+        /// Slot number the other gamepad commands use.
+        gamepad: GamepadSlot,
+    },
+    /// Disconnect the fake gamepad in a slot.
+    GamepadDisconnect {
+        /// Slot number.
+        gamepad: GamepadSlot,
+    },
+    /// Set a fake gamepad button's value.
+    #[serde(rename = "gamepad_button")]
+    GamepadSetButton {
+        /// Slot number.
+        gamepad: GamepadSlot,
+        /// Button by snake_case name, such as `south` or `d_pad_up`.
+        #[serde(deserialize_with = "deserialize_gamepad_button")]
+        button: GamepadButton,
+        /// From 0.0 (released) to 1.0 (pressed).
+        value: f32,
+    },
+    /// Set a fake gamepad axis position.
+    #[serde(rename = "gamepad_axis")]
+    GamepadSetAxis {
+        /// Slot number.
+        gamepad: GamepadSlot,
+        /// Axis by snake_case name, such as `left_stick_x`.
+        #[serde(deserialize_with = "deserialize_gamepad_axis")]
+        axis: GamepadAxis,
+        /// From -1.0 to 1.0.
+        value: f32,
+    },
     /// Wait for a number of frames.
     WaitFrames {
         /// Frames to wait.
@@ -308,6 +349,61 @@ pub enum DriverCommand {
     /// Ask Bevy to restore the primary window from minimized. Only requests the change; use
     /// `wait_frames` and read `window_minimized` in `drive/status` to see it happen.
     WindowRestore {},
+    /// Tell the game the primary window gained or lost focus, by writing `WindowFocused`.
+    ///
+    /// `Window::focused` is deliberately left unchanged: `bevy_winit` compares a changed
+    /// `Window` with its cache and calls the real operating system `focus_window()` when
+    /// `focused` becomes true, which would let the user's real keyboard into the game.
+    Focus {
+        /// True when the window gained focus, false when it lost it.
+        focused: bool,
+    },
+    /// Really resize the primary window, so winit resizes the operating system window and the
+    /// game gets genuine `WindowResized` events.
+    Resize {
+        /// Logical width. Finite, above 0, and at most 16384.
+        width: f32,
+        /// Logical height. Finite, above 0, and at most 16384.
+        height: f32,
+    },
+    /// Report a file hovering over the primary window.
+    FileHover {
+        /// Path handed to the game unchanged. It need not exist. Must not be empty.
+        path: String,
+    },
+    /// Report a file dropped on the primary window.
+    FileDrop {
+        /// Path handed to the game unchanged. It need not exist. Must not be empty.
+        path: String,
+    },
+    /// Report that a hovering file left the primary window without being dropped.
+    FileHoverCancel {},
+    /// Report that the input method editor was enabled.
+    ImeEnable {},
+    /// Report composing text from the input method editor.
+    ImePreedit {
+        /// The text being composed.
+        text: String,
+        /// Cursor start and end as byte offsets into `text`, on character boundaries, with start
+        /// at most end. Absent or `null` hides the cursor.
+        #[serde(default)]
+        cursor: Option<[usize; 2]>,
+    },
+    /// Report text the input method editor wants inserted.
+    ImeCommit {
+        /// The text to insert.
+        text: String,
+    },
+    /// Report that the input method editor was disabled.
+    ImeDisable {},
+    /// Put text on the real operating system clipboard. The first one of a run first saves the
+    /// user's text so `clipboard_restore` or exiting can put it back.
+    ClipboardSet {
+        /// The text to place.
+        text: String,
+    },
+    /// Put the user's saved clipboard text back and forget it.
+    ClipboardRestore {},
     /// Block or allow real keyboard and pointer input while the driver is in control.
     RealInput {
         /// True to block real input, false to let it through.
@@ -412,6 +508,28 @@ impl std::error::Error for CommandParseError {
             Self::Invalid(_) | Self::ConflictingPosition { .. } => None,
         }
     }
+}
+
+fn window_size_problem(width: f32, height: f32) -> Option<String> {
+    let usable = |size: f32| size > 0.0 && size <= MAXIMUM_WINDOW_SIZE;
+    (!usable(width) || !usable(height)).then(|| {
+        format!(
+            "resize width and height must be finite numbers above 0 and at most \
+             {MAXIMUM_WINDOW_SIZE}, got {width} by {height}"
+        )
+    })
+}
+
+fn preedit_cursor_problem(text: &str, [start, end]: [usize; 2]) -> Option<String> {
+    if start > end || end > text.len() {
+        return Some(format!(
+            "ime_preedit cursor must satisfy start <= end <= {} (the text's length in bytes), \
+             got [{start}, {end}]",
+            text.len()
+        ));
+    }
+    (!text.is_char_boundary(start) || !text.is_char_boundary(end))
+        .then(|| "ime_preedit cursor offsets must fall on character boundaries".to_owned())
 }
 
 // What `command` needs to say where it points: `at`, or both `x` and `y`. `optional` commands
@@ -580,6 +698,9 @@ impl DriverCommand {
         if let Some(problem) = self.position_problem() {
             return Err(problem);
         }
+        if let Some(problem) = self.argument_problem() {
+            return Err(CommandParseError::Invalid(problem));
+        }
         let problem = match &self {
             Self::KeyTap { hold_frames: 0, .. } => Some("key_tap hold_frames must be at least 1"),
             Self::Drag { frames: 0, .. } | Self::TouchDrag { frames: 0, .. } => {
@@ -607,11 +728,31 @@ impl DriverCommand {
                 Some("time_fixed_step milliseconds must be a finite number above 0")
             }
             Self::StepFrames { frames: 0 } => Some("step_frames frames must be at least 1"),
+            Self::GamepadSetButton { value, .. } if !(0.0..=1.0).contains(value) => {
+                Some("gamepad_button value must be a number from 0.0 to 1.0")
+            }
+            Self::GamepadSetAxis { value, .. } if !(-1.0..=1.0).contains(value) => {
+                Some("gamepad_axis value must be a number from -1.0 to 1.0")
+            }
             _ => None,
         };
         match problem {
             Some(message) => Err(CommandParseError::Invalid(message.to_owned())),
             None => Ok(self),
+        }
+    }
+
+    fn argument_problem(&self) -> Option<String> {
+        match self {
+            Self::Resize { width, height } => window_size_problem(*width, *height),
+            Self::FileHover { path } | Self::FileDrop { path } if path.is_empty() => {
+                Some("file_hover and file_drop path must not be empty".to_owned())
+            }
+            Self::ImePreedit {
+                text,
+                cursor: Some(cursor),
+            } => preedit_cursor_problem(text, *cursor),
+            _ => None,
         }
     }
 
@@ -794,6 +935,186 @@ mod tests {
         assert_eq!(
             parse(r#"{"command":"double_tap"}"#),
             DriverCommand::DoubleTap {}
+        );
+    }
+
+    #[test]
+    fn parses_gamepad_commands() {
+        assert_eq!(
+            parse(r#"{"command":"gamepad_connect","gamepad":0}"#),
+            DriverCommand::GamepadConnect {
+                gamepad: GamepadSlot(0)
+            }
+        );
+        assert_eq!(
+            parse(r#"{"command":"gamepad_disconnect","gamepad":3}"#),
+            DriverCommand::GamepadDisconnect {
+                gamepad: GamepadSlot(3)
+            }
+        );
+        assert_eq!(
+            parse(r#"{"command":"gamepad_button","gamepad":0,"button":"d_pad_up","value":1.0}"#),
+            DriverCommand::GamepadSetButton {
+                gamepad: GamepadSlot(0),
+                button: GamepadButton::DPadUp,
+                value: 1.0
+            }
+        );
+        assert_eq!(
+            parse(r#"{"command":"gamepad_axis","gamepad":1,"axis":"left_stick_x","value":-0.5}"#),
+            DriverCommand::GamepadSetAxis {
+                gamepad: GamepadSlot(1),
+                axis: GamepadAxis::LeftStickX,
+                value: -0.5
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_unusable_gamepad_values() {
+        for text in [
+            r#"{"command":"gamepad_button","gamepad":0,"button":"cross","value":1}"#,
+            r#"{"command":"gamepad_button","gamepad":0,"button":"south","value":1.5}"#,
+            r#"{"command":"gamepad_button","gamepad":0,"button":"south","value":-0.1}"#,
+            r#"{"command":"gamepad_button","gamepad":0,"button":"south"}"#,
+            r#"{"command":"gamepad_axis","gamepad":0,"axis":"tilt","value":0}"#,
+            r#"{"command":"gamepad_axis","gamepad":0,"axis":"left_stick_x","value":-1.01}"#,
+            r#"{"command":"gamepad_connect","gamepad":-1}"#,
+            r#"{"command":"gamepad_connect","gamepad":256}"#,
+            r#"{"command":"gamepad_connect"}"#,
+            r#"{"command":"gamepad_disconnect","gamepad":0,"extra":1}"#,
+        ] {
+            assert!(parse_command_text(text).is_err(), "{text}");
+        }
+        let message = parse_command_text(
+            r#"{"command":"gamepad_button","gamepad":0,"button":"south","value":2}"#,
+        )
+        .expect_err("a value above 1 should fail")
+        .to_string();
+        assert!(message.contains("0.0 to 1.0"), "{message}");
+    }
+
+    #[test]
+    fn parses_window_event_commands() {
+        assert_eq!(
+            parse(r#"{"command":"focus","focused":false}"#),
+            DriverCommand::Focus { focused: false }
+        );
+        assert_eq!(
+            parse(r#"{"command":"resize","width":800,"height":600.5}"#),
+            DriverCommand::Resize {
+                width: 800.0,
+                height: 600.5
+            }
+        );
+        assert_eq!(
+            parse(r#"{"command":"file_hover","path":"assets/level.txt"}"#),
+            DriverCommand::FileHover {
+                path: "assets/level.txt".to_owned()
+            }
+        );
+        assert_eq!(
+            parse(r#"{"command":"file_drop","path":"a.png"}"#),
+            DriverCommand::FileDrop {
+                path: "a.png".to_owned()
+            }
+        );
+        assert_eq!(
+            parse(r#"{"command":"file_hover_cancel"}"#),
+            DriverCommand::FileHoverCancel {}
+        );
+    }
+
+    #[test]
+    fn parses_ime_and_clipboard_commands() {
+        assert_eq!(
+            parse(r#"{"command":"ime_enable"}"#),
+            DriverCommand::ImeEnable {}
+        );
+        assert_eq!(
+            parse(r#"{"command":"ime_disable"}"#),
+            DriverCommand::ImeDisable {}
+        );
+        assert_eq!(
+            parse(r#"{"command":"ime_commit","text":"日本"}"#),
+            DriverCommand::ImeCommit {
+                text: "日本".to_owned()
+            }
+        );
+        assert_eq!(
+            parse(r#"{"command":"ime_preedit","text":"に","cursor":[0,3]}"#),
+            DriverCommand::ImePreedit {
+                text: "に".to_owned(),
+                cursor: Some([0, 3])
+            }
+        );
+        for text in [
+            r#"{"command":"ime_preedit","text":"に"}"#,
+            r#"{"command":"ime_preedit","text":"に","cursor":null}"#,
+        ] {
+            assert_eq!(
+                parse(text),
+                DriverCommand::ImePreedit {
+                    text: "に".to_owned(),
+                    cursor: None
+                }
+            );
+        }
+        assert_eq!(
+            parse(r#"{"command":"clipboard_set","text":"hello"}"#),
+            DriverCommand::ClipboardSet {
+                text: "hello".to_owned()
+            }
+        );
+        assert_eq!(
+            parse(r#"{"command":"clipboard_restore"}"#),
+            DriverCommand::ClipboardRestore {}
+        );
+    }
+
+    #[test]
+    fn rejects_unusable_window_event_values() {
+        for text in [
+            r#"{"command":"focus"}"#,
+            r#"{"command":"focus","focused":"yes"}"#,
+            r#"{"command":"resize","width":800}"#,
+            r#"{"command":"resize","width":0,"height":600}"#,
+            r#"{"command":"resize","width":800,"height":-1}"#,
+            r#"{"command":"resize","width":16385,"height":600}"#,
+            r#"{"command":"resize","width":1e999,"height":600}"#,
+            r#"{"command":"file_hover","path":""}"#,
+            r#"{"command":"file_drop","path":""}"#,
+            r#"{"command":"file_drop"}"#,
+            r#"{"command":"file_hover_cancel","extra":1}"#,
+            r#"{"command":"ime_enable","extra":1}"#,
+            r#"{"command":"ime_commit"}"#,
+            r#"{"command":"ime_preedit"}"#,
+            r#"{"command":"clipboard_set"}"#,
+            r#"{"command":"clipboard_restore","extra":1}"#,
+        ] {
+            assert!(parse_command_text(text).is_err(), "{text}");
+        }
+        assert!(parse_command_text(r#"{"command":"resize","width":16384,"height":1}"#).is_ok());
+    }
+
+    #[test]
+    fn preedit_cursor_must_fit_the_text_on_character_boundaries() {
+        for text in [
+            r#"{"command":"ime_preedit","text":"に","cursor":[2,1]}"#,
+            r#"{"command":"ime_preedit","text":"に","cursor":[0,4]}"#,
+            r#"{"command":"ime_preedit","text":"に","cursor":[1,3]}"#,
+            r#"{"command":"ime_preedit","text":"に","cursor":[0,2]}"#,
+            r#"{"command":"ime_preedit","text":"a","cursor":[0,1,2]}"#,
+            r#"{"command":"ime_preedit","text":"a","cursor":[-1,0]}"#,
+        ] {
+            assert!(parse_command_text(text).is_err(), "{text}");
+        }
+        let message = parse_command_text(r#"{"command":"ime_preedit","text":"に","cursor":[1,3]}"#)
+            .expect_err("a cursor inside a character should fail")
+            .to_string();
+        assert!(message.contains("character boundaries"), "{message}");
+        assert!(
+            parse_command_text(r#"{"command":"ime_preedit","text":"","cursor":[0,0]}"#).is_ok()
         );
     }
 

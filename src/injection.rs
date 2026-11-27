@@ -3,7 +3,7 @@
 //! Every input is written twice: as its specific message, which `bevy_input` reads, and as the
 //! matching `WindowEvent`, which `bevy_picking` reads. This mirrors `bevy_winit`.
 
-use std::fmt;
+use std::{fmt, path::PathBuf};
 
 use bevy::{
     ecs::{change_detection::DetectChangesMut, system::SystemParam},
@@ -16,7 +16,7 @@ use bevy::{
     },
     math::Vec2,
     prelude::*,
-    window::{CursorMoved, PrimaryWindow, WindowEvent},
+    window::{CursorMoved, FileDragAndDrop, Ime, PrimaryWindow, WindowEvent, WindowFocused},
 };
 
 use crate::steps::character_for_key_code;
@@ -99,7 +99,75 @@ fn named_logical_key(key_code: KeyCode) -> Option<Key> {
     Some(key)
 }
 
+/// A file drag over the primary window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileDragAction {
+    /// A file hovers over the window.
+    Hover(PathBuf),
+    /// A file was dropped on the window.
+    Drop(PathBuf),
+    /// The hovering file left without being dropped.
+    HoverCancel,
+}
+
+impl FileDragAction {
+    fn into_message(self, window: Entity) -> FileDragAndDrop {
+        match self {
+            Self::Hover(path_buf) => FileDragAndDrop::HoveredFile { window, path_buf },
+            Self::Drop(path_buf) => FileDragAndDrop::DroppedFile { window, path_buf },
+            Self::HoverCancel => FileDragAndDrop::HoveredFileCanceled { window },
+        }
+    }
+}
+
+/// One input method editor event for the primary window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImeAction {
+    /// The editor was enabled.
+    Enable,
+    /// Text is being composed.
+    Preedit {
+        /// The composing text.
+        value: String,
+        /// Cursor start and end as byte offsets, or none to hide the cursor.
+        cursor: Option<(usize, usize)>,
+    },
+    /// Text should be inserted.
+    Commit(String),
+    /// The editor was disabled.
+    Disable,
+}
+
+impl ImeAction {
+    fn into_message(self, window: Entity) -> Ime {
+        match self {
+            Self::Enable => Ime::Enabled { window },
+            Self::Preedit { value, cursor } => Ime::Preedit {
+                window,
+                value,
+                cursor,
+            },
+            Self::Commit(value) => Ime::Commit { window, value },
+            Self::Disable => Ime::Disabled { window },
+        }
+    }
+}
+
+/// Registers the window messages the injector writes, for apps without `WindowPlugin`.
+pub struct DriverWindowEventPlugin;
+
+impl Plugin for DriverWindowEventPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_message::<WindowFocused>()
+            .add_message::<FileDragAndDrop>()
+            .add_message::<Ime>();
+    }
+}
+
 /// System parameter that writes injected input for the primary window.
+///
+/// Focus, file drag, and input method events live here, not in a separate parameter, because
+/// every event is also written as a `WindowEvent` and one system may hold only one writer for it.
 #[derive(SystemParam)]
 pub struct InputInjector<'w, 's> {
     primary_window: Query<'w, 's, (Entity, &'static mut Window), With<PrimaryWindow>>,
@@ -113,6 +181,9 @@ pub struct InputInjector<'w, 's> {
     rotation_gesture: MessageWriter<'w, RotationGesture>,
     pan_gesture: MessageWriter<'w, PanGesture>,
     double_tap_gesture: MessageWriter<'w, DoubleTapGesture>,
+    window_focused: MessageWriter<'w, WindowFocused>,
+    file_drag_and_drop: MessageWriter<'w, FileDragAndDrop>,
+    ime: MessageWriter<'w, Ime>,
     window_events: MessageWriter<'w, WindowEvent>,
 }
 
@@ -255,6 +326,51 @@ impl InputInjector<'_, '_> {
         };
         self.window_events.write(WindowEvent::TouchInput(input));
         self.touch_input.write(input);
+        Ok(())
+    }
+
+    /// Writes that the primary window gained or lost focus.
+    ///
+    /// `Window::focused` is not changed: `bevy_winit` compares a changed `Window` with its cache
+    /// and calls the real operating system `focus_window()` when `focused` becomes true, which
+    /// would let the user's real keyboard into the game.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InjectionError::NoPrimaryWindow`] when no primary window exists.
+    pub fn focus(&mut self, focused: bool) -> Result<(), InjectionError> {
+        let window = self.primary_window_entity()?;
+        let event = WindowFocused { window, focused };
+        self.window_events
+            .write(WindowEvent::WindowFocused(event.clone()));
+        self.window_focused.write(event);
+        Ok(())
+    }
+
+    /// Writes a file hover, drop, or hover cancel.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InjectionError::NoPrimaryWindow`] when no primary window exists.
+    pub fn file_drag_and_drop(&mut self, action: FileDragAction) -> Result<(), InjectionError> {
+        let window = self.primary_window_entity()?;
+        let event = action.into_message(window);
+        self.window_events
+            .write(WindowEvent::FileDragAndDrop(event.clone()));
+        self.file_drag_and_drop.write(event);
+        Ok(())
+    }
+
+    /// Writes an input method editor event.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InjectionError::NoPrimaryWindow`] when no primary window exists.
+    pub fn ime(&mut self, action: ImeAction) -> Result<(), InjectionError> {
+        let window = self.primary_window_entity()?;
+        let event = action.into_message(window);
+        self.window_events.write(WindowEvent::Ime(event.clone()));
+        self.ime.write(event);
         Ok(())
     }
 

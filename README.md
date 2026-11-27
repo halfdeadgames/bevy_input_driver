@@ -45,11 +45,22 @@ One JSON object per command, tagged by `command`. Positions are logical pixels i
 | `pinch` / `rotate` | `{"command":"pinch","delta":0.5}` |
 | `pan` | `{"command":"pan","x":10,"y":0}` |
 | `double_tap` | `{"command":"double_tap"}` |
+| `gamepad_connect` / `gamepad_disconnect` | `{"command":"gamepad_connect","gamepad":0}` (a fake gamepad in slot 0 to 255; see [Gamepads](#gamepads)) |
+| `gamepad_button` | `{"command":"gamepad_button","gamepad":0,"button":"south","value":1.0}` (value from 0.0 to 1.0, where 1.0 is pressed) |
+| `gamepad_axis` | `{"command":"gamepad_axis","gamepad":0,"axis":"left_stick_x","value":-0.5}` (value from -1.0 to 1.0) |
+| `focus` | `{"command":"focus","focused":true}` (sends the focus messages only; `Window::focused` and the real focus stay unchanged) |
+| `file_hover` / `file_drop` | `{"command":"file_drop","path":"assets/level.txt"}` (the path is passed on unchanged and need not exist, but must not be empty) |
+| `file_hover_cancel` | `{"command":"file_hover_cancel"}` |
+| `ime_enable` / `ime_disable` | `{"command":"ime_enable"}` |
+| `ime_preedit` | `{"command":"ime_preedit","text":"に","cursor":[0,3]}` (`cursor` is optional byte offsets, start to end, on character boundaries; leave it out to hide the cursor) |
+| `ime_commit` | `{"command":"ime_commit","text":"日本"}` |
+| `clipboard_set` / `clipboard_restore` | `{"command":"clipboard_set","text":"hello"}` (changes your real clipboard; see [Clipboard](#clipboard)) |
 | `wait_frames` | `{"command":"wait_frames","frames":30}` |
 | `wait_seconds` | `{"command":"wait_seconds","seconds":0.5}` (wall-clock time from `std::time::Instant`, so pausing or `time_fixed_step` does not change it) |
 | `wait_until_drawn` | `{"command":"wait_until_drawn","timeout_seconds":60,"settle_frames":3}` (waits until the shaders in use have compiled; see below; timeout default 60, above 0 and at most 3600; `settle_frames` default 3, from 1 to 600) |
 | `screenshot` | `{"command":"screenshot","path":"shots/start.png"}` |
 | `window_minimize` / `window_restore` | `{"command":"window_minimize"}` (see [Minimized windows](#minimized-windows)) |
+| `resize` | `{"command":"resize","width":800,"height":600}` (really resizes the primary window, in logical pixels; each side above 0 and at most 16384) |
 | `real_input` | `{"command":"real_input","blocked":false}` (`blocked` is required; see [Blocking real input](#blocking-real-input)) |
 | `release_all` | `{"command":"release_all"}` |
 | `quit` | `{"command":"quit"}` (exit code 1 if any `expect` check or target failed, otherwise 0) |
@@ -101,8 +112,22 @@ A real mouse resting over a newly shown window sends cursor positions that mix w
 
 - Blocking starts when a launch script loads, or when the first live command arrives through `drive/send`. It lasts until the game exits or `{"command":"real_input","blocked":false}` turns it off. `{"command":"real_input","blocked":true}` turns it back on. After you send `real_input`, later live commands do not change the setting. `drive/status` reports the state as `real_input_blocked`, and one info line is logged each time it changes.
 - Mouse: while blocked, the primary window's `CursorOptions::hit_test` is false, so on Windows the real pointer passes through the window to whatever is below. It is written only when the state changes. The driver never writes `Window::cursor_position`.
-- Keyboard and pointer messages: while blocked, the driver empties the typed `KeyboardInput`, `MouseButtonInput`, `MouseWheel`, `CursorMoved`, `MouseMotion`, `TouchInput`, and gesture message queues at the start of every frame (in `First`, after Bevy swaps the message buffers). Real input is written before that point and injected input in `PreUpdate`, so only real input is dropped. This holds even when the window has focus. Real `KeyboardFocusLost` is kept.
-- Known limits: `Messages<WindowEvent>` is not cleared, because `bevy_picking` reads the injected pointer window events a frame late. A real key press can therefore still show up inside `WindowEvent::KeyboardInput` for a system that reads raw `WindowEvent`s. A game system that reads these typed messages in `FixedUpdate` can miss an injected message in a frame where no fixed step ran, because the next frame's clearing removes it before the step. Read state from `ButtonInput` or read in `Update` instead.
+- Keyboard and pointer messages: real keys only reach a window that has keyboard focus, and the off-screen start leaves the window unfocused. So while blocked, the driver empties the input message queues only in frames where winit says the operating system window has focus. Bevy's `Window::focused` field is not used for this, so an injected `focus` command cannot change which frames are emptied. In those frames it empties the typed `KeyboardInput`, `MouseButtonInput`, `MouseWheel`, `CursorMoved`, `MouseMotion`, `TouchInput`, and gesture queues at the start of the frame. `Ime` and `FileDragAndDrop` don't depend on keyboard focus, so those queues are emptied in every blocked frame. The emptying runs in `First`, after Bevy swaps the message buffers. Real input is written before that point and injected input in `PreUpdate`, so only real input is dropped. Real `KeyboardFocusLost` is kept. Apps without a winit window, such as tests, clear in every blocked frame.
+- Gamepads: Bevy reads real gamepads whether or not the window has focus. While blocked, the driver hides every real gamepad by taking away its `Gamepad` component, so the game sees only the driver's fake gamepads. Turning blocking off gives the components back and releases any button or stick the gamepad last reported as held. A gamepad that disconnects while hidden stays gone. Limit: real connect and disconnect messages (`GamepadConnectionEvent`) still reach the game while blocked, and hiding and restoring removes and adds `Gamepad`, which triggers `Added<Gamepad>` and component observers.
+- Known limits, only while the window has focus: Bevy can't remove single messages from a queue, so the driver can only empty whole queues. `Messages<WindowEvent>` is not emptied, because `bevy_picking` reads the injected pointer window events a frame late. A real key press can therefore still show up inside `WindowEvent::KeyboardInput` for a system that reads raw `WindowEvent`s. A game system that reads the typed messages in `FixedUpdate` can miss an injected message in a frame where no fixed step ran. Read state from `ButtonInput`, or read in `Update`, instead.
+
+## Gamepads
+
+`gamepad_connect` creates a fake gamepad entity named `Input driver gamepad 0` (for slot 0), marked with `DriverGamepad`. Bevy adds its `Gamepad` component through commands, so the command ends the frame, and buttons and axes work from the next command on. Button names are Bevy's `GamepadButton` names in snake_case: `south`, `east`, `north`, `west`, `c`, `z`, `left_trigger`, `left_trigger2`, `right_trigger`, `right_trigger2`, `select`, `start`, `mode`, `left_thumb`, `right_thumb`, `d_pad_up`, `d_pad_down`, `d_pad_left`, and `d_pad_right`. Axis names are `left_stick_x`, `left_stick_y`, `left_z`, `right_stick_x`, `right_stick_y`, and `right_z`. Bevy's `GamepadSettings` filters still apply, so a stick value inside the dead zone (0.05 by default) reads as 0. `release_all` sets every held button and axis back to 0. `gamepad_disconnect` keeps the entity, and a later `gamepad_connect` on the same slot reuses it.
+
+## Clipboard
+
+`clipboard_set` writes the game's `Clipboard` resource. That resource comes from Bevy's `ClipboardPlugin`, which is part of `DefaultPlugins`. With Bevy's `system_clipboard` feature (not on by default), that is your real operating system clipboard. The first `clipboard_set` in a run saves your clipboard text, and `clipboard_restore` or a normal exit puts it back. If you copy something yourself during the run, the restore leaves your new copy alone. If the driver can't read your clipboard first, it doesn't change it and reports an error. Know these limits before you use it:
+
+- During the run, your own copy and paste see the test text.
+- Content that is not text, such as an image, can't be saved, so it is lost.
+- If the game crashes or is killed, the exit restore never runs and the test text stays on your clipboard.
+- Without `system_clipboard`, Bevy keeps a clipboard inside the game, and your real clipboard is not touched.
 
 ## Off-screen start
 
