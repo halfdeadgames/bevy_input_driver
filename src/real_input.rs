@@ -24,9 +24,10 @@ use bevy::{
     prelude::*,
     window::{CursorMoved, CursorOptions, FileDragAndDrop, Ime, PrimaryWindow, WindowPosition},
 };
-use bevy_winit::WINIT_WINDOWS;
 
-use crate::{script_file::script_path_from_arguments, status::DriverStatus};
+use crate::{
+    executor::winit_reports_focus, script_file::script_path_from_arguments, status::DriverStatus,
+};
 
 const ON_SCREEN_ARGUMENT: &str = "--on-screen";
 
@@ -141,13 +142,7 @@ fn primary_window_has_operating_system_focus(
     primary_window: Query<Entity, With<PrimaryWindow>>,
     _main_thread: NonSendMarker,
 ) -> bool {
-    let focus = primary_window.single().ok().and_then(|entity| {
-        WINIT_WINDOWS.with_borrow(|winit_windows| {
-            winit_windows
-                .get_window(entity)
-                .map(|window| window.has_focus())
-        })
-    });
+    let focus = primary_window.single().ok().and_then(winit_reports_focus);
     should_clear_for_focus(focus)
 }
 

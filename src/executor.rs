@@ -44,7 +44,7 @@ impl Plugin for DriverExecutorPlugin {
     }
 }
 
-/// Copies the primary window's physical size and winit's minimized answer into
+/// Copies the primary window's physical size and winit's minimized and focus answers into
 /// [`DriverStatus`].
 // `NonSendMarker` keeps this on the main thread, the only thread whose `WINIT_WINDOWS` is filled.
 pub fn refresh_window_status(
@@ -55,8 +55,10 @@ pub fn refresh_window_status(
     let primary_window = primary_window.single().ok();
     let physical_size =
         primary_window.map(|(_, window)| [window.physical_width(), window.physical_height()]);
-    let os_minimized = primary_window.and_then(|(entity, _)| winit_reports_minimized(entity));
-    status.refresh_window_state(physical_size, os_minimized);
+    let primary_entity = primary_window.map(|(entity, _)| entity);
+    let os_minimized = primary_entity.and_then(winit_reports_minimized);
+    let os_focused = primary_entity.and_then(winit_reports_focus);
+    status.refresh_window_state(physical_size, os_minimized, os_focused);
 }
 
 fn winit_reports_minimized(window_entity: Entity) -> Option<bool> {
@@ -64,6 +66,16 @@ fn winit_reports_minimized(window_entity: Entity) -> Option<bool> {
         winit_windows
             .get_window(window_entity)
             .and_then(|winit_window| winit_window.is_minimized())
+    })
+}
+
+/// Whether the operating system has given the window keyboard focus, or none when it has no
+/// winit window. Call it only from a system holding `NonSendMarker`.
+pub(crate) fn winit_reports_focus(window_entity: Entity) -> Option<bool> {
+    WINIT_WINDOWS.with_borrow(|winit_windows| {
+        winit_windows
+            .get_window(window_entity)
+            .map(|winit_window| winit_window.has_focus())
     })
 }
 

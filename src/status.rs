@@ -91,6 +91,13 @@ pub struct DriverStatus {
     /// when it cannot tell (Wayland, iOS, Android, the web, a game without winit, or no primary
     /// window). Refreshed once per frame.
     pub window_os_minimized: Option<bool>,
+    /// What winit says about operating system keyboard focus on the primary window: true when
+    /// focused, false when not, or none without a primary window or a winit window (tests and
+    /// headless apps). While real input is blocked, the driver empties the keyboard and pointer
+    /// queues only in frames where this is true, or in every frame where it is none. Unlike
+    /// `Window::focused`, an injected `focus` command does not change it. Refreshed once per
+    /// frame.
+    pub window_os_focused: Option<bool>,
     /// True while real keyboard and pointer input is blocked. Starts when a launch script loads
     /// or the first live command arrives, and ends with a `real_input` command.
     pub real_input_blocked: bool,
@@ -165,15 +172,17 @@ impl DriverStatus {
         }
     }
 
-    /// Copies the primary window's physical size and winit's minimized answer, or clears both
-    /// without a primary window.
+    /// Copies the primary window's physical size and winit's minimized and focus answers, or
+    /// clears them without a primary window.
     pub fn refresh_window_state(
         &mut self,
         physical_size: Option<[u32; 2]>,
         os_minimized: Option<bool>,
+        os_focused: Option<bool>,
     ) {
         self.window_size = physical_size;
         self.window_os_minimized = os_minimized;
+        self.window_os_focused = os_focused;
         // The size check stays even where winit answers: on Windows a window can end up 0 by 0
         // while the OS says it is not minimized, and screenshots of it come back 1 by 1.
         self.window_minimized = os_minimized == Some(true) || physical_size == Some([0, 0]);
@@ -316,7 +325,7 @@ mod tests {
     fn a_zero_sized_window_counts_as_minimized_whatever_winit_says() {
         let mut status = DriverStatus::default();
         for os_minimized in [None, Some(false), Some(true)] {
-            status.refresh_window_state(Some([0, 0]), os_minimized);
+            status.refresh_window_state(Some([0, 0]), os_minimized, None);
             assert!(status.window_minimized);
             assert_eq!(status.window_os_minimized, os_minimized);
         }
@@ -325,7 +334,7 @@ mod tests {
     #[test]
     fn winit_reporting_minimized_counts_even_when_the_size_is_kept() {
         let mut status = DriverStatus::default();
-        status.refresh_window_state(Some([1280, 720]), Some(true));
+        status.refresh_window_state(Some([1280, 720]), Some(true), None);
         assert!(status.window_minimized);
         assert_eq!(status.window_size, Some([1280, 720]));
     }
@@ -334,13 +343,24 @@ mod tests {
     fn a_sized_window_is_not_minimized_unless_winit_says_so() {
         let mut status = DriverStatus::default();
         for os_minimized in [None, Some(false)] {
-            status.refresh_window_state(Some([1280, 720]), os_minimized);
+            status.refresh_window_state(Some([1280, 720]), os_minimized, None);
             assert!(!status.window_minimized);
         }
-        status.refresh_window_state(None, None);
+        status.refresh_window_state(None, None, None);
         assert!(!status.window_minimized);
         assert_eq!(status.window_size, None);
         assert_eq!(status.window_os_minimized, None);
+    }
+
+    #[test]
+    fn copies_winit_focus_and_clears_it_without_a_window() {
+        let mut status = DriverStatus::default();
+        for os_focused in [Some(true), Some(false)] {
+            status.refresh_window_state(Some([1280, 720]), Some(false), os_focused);
+            assert_eq!(status.window_os_focused, os_focused);
+        }
+        status.refresh_window_state(None, None, None);
+        assert_eq!(status.window_os_focused, None);
     }
 
     #[test]
