@@ -156,6 +156,8 @@ pub enum GamepadInjectionError {
     NotConnected(GamepadSlot),
     /// No gamepad was ever connected in the slot.
     NeverConnected(GamepadSlot),
+    /// The game despawned the slot's entity, so the slot is now disconnected.
+    EntityRemoved(GamepadSlot),
 }
 
 impl fmt::Display for GamepadInjectionError {
@@ -168,6 +170,10 @@ impl fmt::Display for GamepadInjectionError {
             Self::NeverConnected(slot) => {
                 write!(formatter, "gamepad {slot} was never connected")
             }
+            Self::EntityRemoved(slot) => write!(
+                formatter,
+                "gamepad {slot}'s entity was removed by the game; connect it again"
+            ),
         }
     }
 }
@@ -210,7 +216,7 @@ struct HeldGamepadInput {
 /// The entity behind each fake gamepad slot, and whether the slot is connected.
 ///
 /// An entity stays in the map after a disconnect, so a reconnect reuses it as Bevy does for real
-/// devices.
+/// devices, unless the game despawned it, in which case a reconnect spawns a new one.
 #[derive(Resource, Debug, Default)]
 pub struct DriverGamepads {
     slots: HashMap<GamepadSlot, SlotState>,
@@ -269,15 +275,16 @@ fn gamepad_name(slot: GamepadSlot) -> String {
 
 /// System parameter that writes injected gamepad messages.
 #[derive(SystemParam)]
-pub struct GamepadInjector<'w> {
+pub struct GamepadInjector<'w, 's> {
     gamepads: ResMut<'w, DriverGamepads>,
+    live_gamepads: Query<'w, 's, (), With<DriverGamepad>>,
     raw_events: MessageWriter<'w, RawGamepadEvent>,
     connection_events: MessageWriter<'w, GamepadConnectionEvent>,
     raw_button_events: MessageWriter<'w, RawGamepadButtonChangedEvent>,
     raw_axis_events: MessageWriter<'w, RawGamepadAxisChangedEvent>,
 }
 
-impl GamepadInjector<'_> {
+impl GamepadInjector<'_, '_> {
     /// Applies one change to the gamepad in `slot`.
     ///
     /// # Errors
@@ -307,8 +314,8 @@ impl GamepadInjector<'_> {
             Some(state) if state.connected => {
                 return Err(GamepadInjectionError::AlreadyConnected(slot));
             }
-            Some(state) => state.entity,
-            None => commands
+            Some(state) if self.live_gamepads.contains(state.entity) => state.entity,
+            _ => commands
                 .spawn((Name::new(gamepad_name(slot)), DriverGamepad))
                 .id(),
         };
@@ -325,10 +332,23 @@ impl GamepadInjector<'_> {
     }
 
     fn disconnect(&mut self, slot: GamepadSlot) -> Result<(), GamepadInjectionError> {
-        let entity = self.gamepads.require_connected(slot)?.entity;
+        let entity = self.connected_live_entity(slot)?;
         self.gamepads.set_connected(slot, entity, false);
         self.write_connection(entity, GamepadConnection::Disconnected);
         Ok(())
+    }
+
+    // A despawned entity cannot receive messages: Bevy only warns, so the script would never know.
+    fn connected_live_entity(
+        &mut self,
+        slot: GamepadSlot,
+    ) -> Result<Entity, GamepadInjectionError> {
+        let entity = self.gamepads.require_connected(slot)?.entity;
+        if self.live_gamepads.contains(entity) {
+            return Ok(entity);
+        }
+        self.gamepads.set_connected(slot, entity, false);
+        Err(GamepadInjectionError::EntityRemoved(slot))
     }
 
     fn change_button(
@@ -337,9 +357,10 @@ impl GamepadInjector<'_> {
         button: GamepadButton,
         value: f32,
     ) -> Result<(), GamepadInjectionError> {
-        let state = self.gamepads.require_connected(slot)?;
-        state.track_button(button, value);
-        let entity = state.entity;
+        let entity = self.connected_live_entity(slot)?;
+        self.gamepads
+            .require_connected(slot)?
+            .track_button(button, value);
         self.write_button(entity, button, value);
         Ok(())
     }
@@ -350,9 +371,10 @@ impl GamepadInjector<'_> {
         axis: GamepadAxis,
         value: f32,
     ) -> Result<(), GamepadInjectionError> {
-        let state = self.gamepads.require_connected(slot)?;
-        state.track_axis(axis, value);
-        let entity = state.entity;
+        let entity = self.connected_live_entity(slot)?;
+        self.gamepads
+            .require_connected(slot)?
+            .track_axis(axis, value);
         self.write_axis(entity, axis, value);
         Ok(())
     }
@@ -578,6 +600,43 @@ mod tests {
         assert_eq!(connect_slot_zero(&mut app), entity);
         assert!(app.world().get::<Gamepad>(entity).is_some());
         assert!(recorded_errors(&app).is_empty());
+    }
+
+    #[test]
+    fn reconnecting_after_the_game_despawned_the_entity_spawns_a_new_one() {
+        let mut app = gamepad_app();
+        let old_entity = connect_slot_zero(&mut app);
+        run_command(&mut app, r#"{"command":"gamepad_disconnect","gamepad":0}"#);
+        app.world_mut().despawn(old_entity);
+
+        let new_entity = connect_slot_zero(&mut app);
+        assert_ne!(new_entity, old_entity);
+        assert!(app.world().get::<Gamepad>(new_entity).is_some());
+        assert!(recorded_errors(&app).is_empty());
+    }
+
+    #[test]
+    fn input_on_a_despawned_gamepad_reports_it_and_disconnects_the_slot() {
+        let mut app = gamepad_app();
+        let entity = connect_slot_zero(&mut app);
+        app.world_mut().despawn(entity);
+        run_command(
+            &mut app,
+            r#"{"command":"gamepad_button","gamepad":0,"button":"south","value":1.0}"#,
+        );
+        assert_eq!(
+            recorded_errors(&app),
+            vec![
+                "gamepad_button: gamepad 0's entity was removed by the game; connect it again"
+                    .to_owned()
+            ]
+        );
+        assert_eq!(
+            app.world()
+                .resource::<DriverGamepads>()
+                .connected_entity(SLOT),
+            None
+        );
     }
 
     #[test]

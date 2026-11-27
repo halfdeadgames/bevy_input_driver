@@ -47,22 +47,55 @@ pub enum ClipboardSnapshot {
 pub enum ClipboardReadOutcome {
     /// The clipboard's text.
     Text(String),
-    /// The clipboard is empty, holds non-text content, or the read was not immediately ready.
+    /// The clipboard is empty or holds non-text content.
     NoText,
+    /// The read was not ready immediately, so what the clipboard holds is unknown.
+    NotReady,
     /// The read failed, so what the clipboard holds is unknown.
     Failed(ClipboardError),
 }
 
+impl ClipboardReadOutcome {
+    /// The reason the clipboard's content is unknown, or none when the read told what it holds.
+    #[must_use]
+    pub fn into_problem(self) -> Option<ClipboardReadProblem> {
+        match self {
+            Self::Text(_) | Self::NoText => None,
+            Self::NotReady => Some(ClipboardReadProblem::NotReady),
+            Self::Failed(error) => Some(ClipboardReadProblem::Failed(error)),
+        }
+    }
+}
+
+/// Why a clipboard read could not tell what the clipboard holds.
+#[derive(Debug, Clone)]
+pub enum ClipboardReadProblem {
+    /// The read was not ready immediately.
+    NotReady,
+    /// The read failed.
+    Failed(ClipboardError),
+}
+
+impl fmt::Display for ClipboardReadProblem {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotReady => write!(formatter, "the clipboard was not ready to be read"),
+            Self::Failed(source) => write!(formatter, "{source}"),
+        }
+    }
+}
+
 /// Sorts the raw result of `poll_result` into an outcome. Only errors that mean "no text here"
-/// count as [`ClipboardReadOutcome::NoText`]; every other error is a failed read.
+/// count as [`ClipboardReadOutcome::NoText`]; a read that is not ready or fails leaves the
+/// clipboard's content unknown.
 #[must_use]
 pub fn classify_read(result: Option<Result<String, ClipboardError>>) -> ClipboardReadOutcome {
     match result {
         Some(Ok(text)) => ClipboardReadOutcome::Text(text),
-        None
-        | Some(Err(ClipboardError::ContentNotAvailable | ClipboardError::ConversionFailure)) => {
+        Some(Err(ClipboardError::ContentNotAvailable | ClipboardError::ConversionFailure)) => {
             ClipboardReadOutcome::NoText
         }
+        None => ClipboardReadOutcome::NotReady,
         Some(Err(error)) => ClipboardReadOutcome::Failed(error),
     }
 }
@@ -79,23 +112,32 @@ pub enum RestorePlan {
     /// The clipboard no longer holds the driver's last text, so the user copied something newer
     /// and the saved text is dropped instead of written over it.
     UserChangedClipboard,
+    /// The clipboard could not be read, so the saved text is kept for a later restore.
+    CouldNotCheck,
 }
 
 /// Decides what restoring a saved snapshot means. `last_written` is the last text the driver
-/// wrote and `current` is what the clipboard holds now, or none when it could not be read.
+/// wrote and `current` is the result of reading the clipboard now. Only a read that succeeded can
+/// show that the user changed the clipboard.
 #[must_use]
 pub fn restore_plan(
-    snapshot: Option<ClipboardSnapshot>,
+    snapshot: Option<&ClipboardSnapshot>,
     last_written: Option<&str>,
-    current: Option<&str>,
+    current: &ClipboardReadOutcome,
 ) -> RestorePlan {
-    match snapshot {
-        Some(ClipboardSnapshot::Text(text)) if current.is_some() && current == last_written => {
-            RestorePlan::WriteText(text)
+    match (snapshot, current) {
+        (None, _) => RestorePlan::NothingSaved,
+        (Some(ClipboardSnapshot::NoText), _) => RestorePlan::NoTextWasSaved,
+        (
+            Some(ClipboardSnapshot::Text(_)),
+            ClipboardReadOutcome::NotReady | ClipboardReadOutcome::Failed(_),
+        ) => RestorePlan::CouldNotCheck,
+        (Some(ClipboardSnapshot::Text(saved)), ClipboardReadOutcome::Text(text))
+            if Some(text.as_str()) == last_written =>
+        {
+            RestorePlan::WriteText(saved.clone())
         }
-        Some(ClipboardSnapshot::Text(_)) => RestorePlan::UserChangedClipboard,
-        Some(ClipboardSnapshot::NoText) => RestorePlan::NoTextWasSaved,
-        None => RestorePlan::NothingSaved,
+        (Some(ClipboardSnapshot::Text(_)), _) => RestorePlan::UserChangedClipboard,
     }
 }
 
@@ -112,18 +154,19 @@ impl SavedUserClipboard {
     ///
     /// # Errors
     ///
-    /// Returns the read error, and saves nothing, when the read failed.
+    /// Returns the problem, and saves nothing, when the read failed or was not ready.
     pub fn remember_first(
         &mut self,
         read: impl FnOnce() -> ClipboardReadOutcome,
-    ) -> Result<Option<&ClipboardSnapshot>, ClipboardError> {
+    ) -> Result<Option<&ClipboardSnapshot>, ClipboardReadProblem> {
         if self.snapshot.is_some() {
             return Ok(None);
         }
         let snapshot = match read() {
             ClipboardReadOutcome::Text(text) => ClipboardSnapshot::Text(text),
             ClipboardReadOutcome::NoText => ClipboardSnapshot::NoText,
-            ClipboardReadOutcome::Failed(error) => return Err(error),
+            ClipboardReadOutcome::NotReady => return Err(ClipboardReadProblem::NotReady),
+            ClipboardReadOutcome::Failed(error) => return Err(ClipboardReadProblem::Failed(error)),
         };
         Ok(Some(self.snapshot.insert(snapshot)))
     }
@@ -136,6 +179,17 @@ impl SavedUserClipboard {
     /// Removes and returns the saved snapshot and the driver's last written text.
     pub fn take(&mut self) -> (Option<ClipboardSnapshot>, Option<String>) {
         (self.snapshot.take(), self.last_written.take())
+    }
+
+    /// Forgets the saved snapshot and the driver's last written text.
+    pub fn forget(&mut self) {
+        self.take();
+    }
+
+    /// The saved snapshot and the driver's last written text, left in place.
+    #[must_use]
+    pub fn peek(&self) -> (Option<&ClipboardSnapshot>, Option<&str>) {
+        (self.snapshot.as_ref(), self.last_written.as_deref())
     }
 }
 
@@ -150,7 +204,9 @@ pub enum ClipboardCommandError {
     /// The clipboard refused the text.
     Write(ClipboardError),
     /// The user's clipboard could not be read, so it was not changed.
-    Read(ClipboardError),
+    Read(ClipboardReadProblem),
+    /// The clipboard could not be read before restoring, so the saved text was kept.
+    Check(ClipboardReadProblem),
 }
 
 impl fmt::Display for ClipboardCommandError {
@@ -164,6 +220,11 @@ impl fmt::Display for ClipboardCommandError {
             Self::Read(source) => write!(
                 formatter,
                 "could not read the clipboard to save it first, so it was not changed: {source}"
+            ),
+            Self::Check(source) => write!(
+                formatter,
+                "could not read the clipboard to check it, so the saved text was kept for a later \
+                 clipboard_restore: {source}"
             ),
         }
     }
@@ -201,24 +262,46 @@ fn set_clipboard_text(world: &mut World, text: String) -> Result<(), ClipboardCo
 
 fn restore_saved_clipboard(world: &mut World) -> Result<RestorePlan, ClipboardCommandError> {
     world.init_resource::<SavedUserClipboard>();
-    let (snapshot, last_written) = world.resource_mut::<SavedUserClipboard>().take();
-    if !matches!(snapshot, Some(ClipboardSnapshot::Text(_))) {
-        return Ok(restore_plan(snapshot, None, None));
-    }
-    let mut clipboard = world
-        .get_resource_mut::<Clipboard>()
-        .ok_or(ClipboardCommandError::NoClipboard { verb: "restored" })?;
-    let current = match read_clipboard(&mut clipboard) {
-        ClipboardReadOutcome::Text(text) => Some(text),
-        ClipboardReadOutcome::NoText | ClipboardReadOutcome::Failed(_) => None,
+    let (snapshot, last_written) = {
+        let (snapshot, last_written) = world.resource::<SavedUserClipboard>().peek();
+        (snapshot.cloned(), last_written.map(str::to_owned))
     };
-    let plan = restore_plan(snapshot, last_written.as_deref(), current.as_deref());
-    if let RestorePlan::WriteText(text) = &plan {
-        clipboard
-            .set_text(text.as_str())
-            .map_err(ClipboardCommandError::Write)?;
+    if !matches!(snapshot, Some(ClipboardSnapshot::Text(_))) {
+        world.resource_mut::<SavedUserClipboard>().forget();
+        return Ok(restore_plan(
+            snapshot.as_ref(),
+            None,
+            &ClipboardReadOutcome::NoText,
+        ));
     }
+    if !world.contains_resource::<Clipboard>() {
+        return Err(ClipboardCommandError::NoClipboard { verb: "restored" });
+    }
+    let plan = world.resource_scope(|_, mut clipboard: Mut<Clipboard>| {
+        check_and_restore(&mut clipboard, snapshot.as_ref(), last_written.as_deref())
+    })?;
+    world.resource_mut::<SavedUserClipboard>().forget();
     Ok(plan)
+}
+
+// The saved state stays until this succeeds, so a failed read or write can be retried.
+fn check_and_restore(
+    clipboard: &mut Clipboard,
+    snapshot: Option<&ClipboardSnapshot>,
+    last_written: Option<&str>,
+) -> Result<RestorePlan, ClipboardCommandError> {
+    let outcome = read_clipboard(clipboard);
+    let plan = restore_plan(snapshot, last_written, &outcome);
+    match (plan, outcome.into_problem()) {
+        (RestorePlan::CouldNotCheck, Some(problem)) => Err(ClipboardCommandError::Check(problem)),
+        (RestorePlan::WriteText(text), _) => {
+            clipboard
+                .set_text(text.as_str())
+                .map_err(ClipboardCommandError::Write)?;
+            Ok(RestorePlan::WriteText(text))
+        }
+        (plan, _) => Ok(plan),
+    }
 }
 
 fn log_restore(plan: &RestorePlan, context: &str) {
@@ -236,6 +319,10 @@ fn log_restore(plan: &RestorePlan, context: &str) {
         RestorePlan::UserChangedClipboard => info!(
             "input driver: {context}: the user changed the clipboard since the driver's last \
              write, so the saved text was dropped and the clipboard left as it is"
+        ),
+        RestorePlan::CouldNotCheck => warn!(
+            "input driver: {context}: the clipboard could not be checked, so the saved text was \
+             kept"
         ),
     }
 }
@@ -262,7 +349,10 @@ fn restore_on_exit(world: &mut World) {
     match restore_saved_clipboard(world) {
         Ok(RestorePlan::NothingSaved) => {}
         Ok(plan) => log_restore(&plan, "restoring the clipboard on exit"),
-        Err(problem) => warn!("input driver: restoring the clipboard on exit failed: {problem}"),
+        Err(problem) => warn!(
+            "input driver: restoring the clipboard on exit failed, so the user's clipboard text \
+             may be lost: {problem}"
+        ),
     }
 }
 
@@ -309,8 +399,11 @@ mod tests {
             classify_read(Some(Ok("mine".to_owned()))),
             ClipboardReadOutcome::Text(value) if value == "mine"
         ));
+        assert!(matches!(
+            classify_read(None),
+            ClipboardReadOutcome::NotReady
+        ));
         for result in [
-            None,
             Some(Err(ClipboardError::ContentNotAvailable)),
             Some(Err(ClipboardError::ConversionFailure)),
         ] {
@@ -355,7 +448,12 @@ mod tests {
         let mut saved = SavedUserClipboard::default();
         let outcome = saved
             .remember_first(|| ClipboardReadOutcome::Failed(ClipboardError::ClipboardOccupied));
-        assert!(matches!(outcome, Err(ClipboardError::ClipboardOccupied)));
+        assert!(matches!(
+            outcome,
+            Err(ClipboardReadProblem::Failed(
+                ClipboardError::ClipboardOccupied
+            ))
+        ));
         assert_eq!(saved.take(), (None, None));
         assert_eq!(
             remembered(&mut saved, ClipboardReadOutcome::NoText),
@@ -379,40 +477,92 @@ mod tests {
     }
 
     #[test]
+    fn not_ready_reads_cannot_save_the_original() {
+        let mut saved = SavedUserClipboard::default();
+        let outcome = saved.remember_first(|| ClipboardReadOutcome::NotReady);
+        assert!(matches!(outcome, Err(ClipboardReadProblem::NotReady)));
+        assert_eq!(saved.take(), (None, None));
+    }
+
+    #[test]
     fn restore_writes_back_only_while_the_clipboard_still_holds_the_driver_text() {
-        let saved = || Some(ClipboardSnapshot::Text("mine".to_owned()));
+        let saved = ClipboardSnapshot::Text("mine".to_owned());
         assert_eq!(
-            restore_plan(saved(), Some("driver"), Some("driver")),
+            restore_plan(Some(&saved), Some("driver"), &text("driver")),
             RestorePlan::WriteText("mine".to_owned())
         );
         assert_eq!(
-            restore_plan(saved(), Some("driver"), Some("newer copy")),
+            restore_plan(Some(&saved), Some("driver"), &text("newer copy")),
             RestorePlan::UserChangedClipboard
         );
         assert_eq!(
-            restore_plan(saved(), Some("driver"), None),
+            restore_plan(Some(&saved), Some("driver"), &ClipboardReadOutcome::NoText),
             RestorePlan::UserChangedClipboard
         );
         assert_eq!(
-            restore_plan(saved(), None, None),
+            restore_plan(Some(&saved), None, &text("driver")),
             RestorePlan::UserChangedClipboard
         );
+    }
+
+    #[test]
+    fn restore_could_not_check_when_the_read_failed_or_was_not_ready() {
+        let saved = ClipboardSnapshot::Text("mine".to_owned());
+        for outcome in [
+            ClipboardReadOutcome::NotReady,
+            ClipboardReadOutcome::Failed(ClipboardError::ClipboardOccupied),
+        ] {
+            assert_eq!(
+                restore_plan(Some(&saved), Some("driver"), &outcome),
+                RestorePlan::CouldNotCheck
+            );
+        }
     }
 
     #[test]
     fn restore_plans_without_saved_text_ignore_the_clipboard() {
+        let unreadable = ClipboardReadOutcome::NotReady;
         assert_eq!(
-            restore_plan(Some(ClipboardSnapshot::NoText), None, None),
+            restore_plan(Some(&ClipboardSnapshot::NoText), None, &unreadable),
             RestorePlan::NoTextWasSaved
         );
-        assert_eq!(restore_plan(None, None, None), RestorePlan::NothingSaved);
+        assert_eq!(
+            restore_plan(None, None, &unreadable),
+            RestorePlan::NothingSaved
+        );
     }
 
     #[test]
-    fn a_failed_read_error_names_the_command_and_the_cause() {
-        let message = ClipboardCommandError::Read(ClipboardError::ClipboardOccupied).to_string();
+    fn peeking_and_forgetting_the_saved_state() {
+        let mut saved = SavedUserClipboard::default();
+        remembered(&mut saved, text("one"));
+        saved.note_written("driver".to_owned());
+        assert_eq!(
+            saved.peek(),
+            (
+                Some(&ClipboardSnapshot::Text("one".to_owned())),
+                Some("driver")
+            )
+        );
+        saved.forget();
+        assert_eq!(saved.peek(), (None, None));
+    }
+
+    #[test]
+    fn read_problems_name_the_command_and_the_cause() {
+        let message = ClipboardCommandError::Read(ClipboardReadProblem::Failed(
+            ClipboardError::ClipboardOccupied,
+        ))
+        .to_string();
         let prefix = "could not read the clipboard to save it first, so it was not changed: ";
         assert!(message.starts_with(prefix), "{message}");
+
+        let message = ClipboardCommandError::Check(ClipboardReadProblem::NotReady).to_string();
+        assert_eq!(
+            message,
+            "could not read the clipboard to check it, so the saved text was kept for a later \
+             clipboard_restore: the clipboard was not ready to be read"
+        );
     }
 
     #[test]

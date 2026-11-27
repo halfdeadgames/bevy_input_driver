@@ -90,7 +90,7 @@ pub const MAXIMUM_DRAWN_TIMEOUT_SECONDS: f32 = 3600.0;
 /// Largest `settle_frames` a `wait_until_drawn` command may use.
 pub const MAXIMUM_DRAWN_SETTLE_FRAMES: u32 = 600;
 /// Largest `width` or `height`, in logical pixels, a `resize` command may use.
-pub const MAXIMUM_WINDOW_SIZE: f32 = 16384.0;
+pub const MAXIMUM_WINDOW_SIZE: f32 = 8192.0;
 
 fn default_hold_frames() -> u32 {
     DEFAULT_TAP_HOLD_FRAMES
@@ -361,9 +361,9 @@ pub enum DriverCommand {
     /// Really resize the primary window, so winit resizes the operating system window and the
     /// game gets genuine `WindowResized` events.
     Resize {
-        /// Logical width. Finite, above 0, and at most 16384.
+        /// Logical width. Finite, above 0, and at most 8192.
         width: f32,
-        /// Logical height. Finite, above 0, and at most 16384.
+        /// Logical height. Finite, above 0, and at most 8192.
         height: f32,
     },
     /// Report a file hovering over the primary window.
@@ -1080,7 +1080,7 @@ mod tests {
             r#"{"command":"resize","width":800}"#,
             r#"{"command":"resize","width":0,"height":600}"#,
             r#"{"command":"resize","width":800,"height":-1}"#,
-            r#"{"command":"resize","width":16385,"height":600}"#,
+            r#"{"command":"resize","width":8193,"height":600}"#,
             r#"{"command":"resize","width":1e999,"height":600}"#,
             r#"{"command":"file_hover","path":""}"#,
             r#"{"command":"file_drop","path":""}"#,
@@ -1094,7 +1094,7 @@ mod tests {
         ] {
             assert!(parse_command_text(text).is_err(), "{text}");
         }
-        assert!(parse_command_text(r#"{"command":"resize","width":16384,"height":1}"#).is_ok());
+        assert!(parse_command_text(r#"{"command":"resize","width":8192,"height":1}"#).is_ok());
     }
 
     #[test]

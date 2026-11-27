@@ -71,7 +71,7 @@ fn winit_reports_minimized(window_entity: Entity) -> Option<bool> {
 #[derive(SystemParam)]
 pub struct DriverInjectors<'w, 's> {
     input: InputInjector<'w, 's>,
-    gamepad: GamepadInjector<'w>,
+    gamepad: GamepadInjector<'w, 's>,
 }
 
 /// Runs steps until a barrier or wait, so injected input is read by `InputSystems` this frame.
