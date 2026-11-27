@@ -148,7 +148,7 @@ pub trait InputDriverAppExt {
 
     /// Registers a check the `expect` command can run by `name`.
     ///
-    /// The system receives the command's `args` as `In<Value>` (`null` when absent) and returns
+    /// The system receives the command's `arguments` as `In<Value>` (`null` when absent) and returns
     /// the value it read, or an error message when the check fails by itself. Registering a name
     /// twice replaces the first check. Works before or after adding [`InputDriverPlugin`].
     ///
@@ -156,10 +156,10 @@ pub trait InputDriverAppExt {
     /// exit code and is not recorded as a failed check.
     ///
     /// [`InputDriverPlugin`]: crate::InputDriverPlugin
-    fn add_driver_check<M>(
+    fn add_driver_check<Marker>(
         &mut self,
         name: impl Into<String>,
-        check_system: impl IntoSystem<In<Value>, Result<Value, String>, M> + 'static,
+        check_system: impl IntoSystem<In<Value>, Result<Value, String>, Marker> + 'static,
     ) -> &mut Self;
 
     /// Registers a BRP method served next to the `drive/*` methods, such as `game/score`.
@@ -176,27 +176,27 @@ pub trait InputDriverAppExt {
     /// call, logs a warning.
     ///
     /// [`InputDriverPlugin`]: crate::InputDriverPlugin
-    fn add_driver_remote_method<M>(
+    fn add_driver_remote_method<Marker>(
         &mut self,
         name: impl Into<String>,
-        handler: impl IntoSystem<In<Option<Value>>, BrpResult, M> + 'static,
+        handler: impl IntoSystem<In<Option<Value>>, BrpResult, Marker> + 'static,
     ) -> &mut Self;
 }
 
 impl InputDriverAppExt for App {
-    fn add_driver_check<M>(
+    fn add_driver_check<Marker>(
         &mut self,
         name: impl Into<String>,
-        check_system: impl IntoSystem<In<Value>, Result<Value, String>, M> + 'static,
+        check_system: impl IntoSystem<In<Value>, Result<Value, String>, Marker> + 'static,
     ) -> &mut Self {
         register_driver_check(self, name.into(), check_system);
         self
     }
 
-    fn add_driver_remote_method<M>(
+    fn add_driver_remote_method<Marker>(
         &mut self,
         name: impl Into<String>,
-        handler: impl IntoSystem<In<Option<Value>>, BrpResult, M> + 'static,
+        handler: impl IntoSystem<In<Option<Value>>, BrpResult, Marker> + 'static,
     ) -> &mut Self {
         register_remote_method(self, name.into(), handler);
         self

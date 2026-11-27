@@ -186,7 +186,7 @@ pub enum DriverStep {
         /// Name the check was registered under.
         check: String,
         /// Input handed to the check.
-        args: Value,
+        arguments: Value,
         /// Value the check must return, if any.
         equals: Option<Value>,
     },
@@ -392,9 +392,9 @@ pub fn expand_command(command: &DriverCommand) -> Vec<DriverStep> {
         DriverCommand::TimePause {} => time_steps(TimeControlAction::Pause),
         DriverCommand::TimeResume {} => time_steps(TimeControlAction::Resume),
         DriverCommand::TimeSpeed { factor } => time_steps(TimeControlAction::SetSpeed(*factor)),
-        DriverCommand::TimeFixedStep { ms } => {
-            time_steps(TimeControlAction::FixedStep { milliseconds: *ms })
-        }
+        DriverCommand::TimeFixedStep { milliseconds } => time_steps(TimeControlAction::FixedStep {
+            milliseconds: *milliseconds,
+        }),
         DriverCommand::TimeReal {} => time_steps(TimeControlAction::RealTime),
         // Measured live (2026-11-25, 100 ms fixed step): waiting `frames - 1` advanced only
         // `frames - 1` steps, and stepping 1 frame advanced none, so the wait is the full count.
@@ -409,13 +409,13 @@ pub fn expand_command(command: &DriverCommand) -> Vec<DriverStep> {
         // The barrier first lets game systems react to every earlier input before the check reads.
         DriverCommand::Expect {
             check,
-            args,
+            arguments,
             equals,
         } => vec![
             DriverStep::EndFrame,
             DriverStep::Check {
                 check: check.clone(),
-                args: args.clone().unwrap_or_default(),
+                arguments: arguments.clone().unwrap_or_default(),
                 equals: equals.clone(),
             },
         ],
@@ -611,7 +611,7 @@ mod tests {
 
     #[test]
     fn key_tap_has_down_barriers_up_barrier() {
-        let steps = expand(r#"{"cmd":"key_tap","key":"KeyA","hold_frames":3}"#);
+        let steps = expand(r#"{"command":"key_tap","key":"KeyA","hold_frames":3}"#);
         assert_eq!(
             steps,
             vec![
@@ -630,7 +630,7 @@ mod tests {
 
     #[test]
     fn drag_moves_evenly_and_ends_exactly_at_target() {
-        let steps = expand(r#"{"cmd":"drag","from":[0,0],"to":[100,50],"frames":4}"#);
+        let steps = expand(r#"{"command":"drag","from":[0,0],"to":[100,50],"frames":4}"#);
         let moves: Vec<Vec2> = steps
             .iter()
             .filter_map(|step| match step {
@@ -654,7 +654,7 @@ mod tests {
 
     #[test]
     fn touch_drag_starts_moves_and_ends() {
-        let steps = expand(r#"{"cmd":"touch_drag","from":[1,1],"to":[3,3],"frames":2,"id":7}"#);
+        let steps = expand(r#"{"command":"touch_drag","from":[1,1],"to":[3,3],"frames":2,"id":7}"#);
         let phases: Vec<TouchPhase> = steps
             .iter()
             .filter_map(|step| match step {
@@ -675,7 +675,7 @@ mod tests {
 
     #[test]
     fn click_with_position_moves_first() {
-        let steps = expand(r#"{"cmd":"click","x":5,"y":6}"#);
+        let steps = expand(r#"{"command":"click","x":5,"y":6}"#);
         assert_eq!(
             steps.first(),
             Some(&DriverStep::MouseMove {
@@ -687,7 +687,7 @@ mod tests {
 
     #[test]
     fn type_text_maps_characters_to_keys_one_frame_each() {
-        let steps = expand(r#"{"cmd":"type_text","text":"Ab 1\n!"}"#);
+        let steps = expand(r#"{"command":"type_text","text":"Ab 1\n!"}"#);
         let downs: Vec<(KeyCode, Option<String>)> = steps
             .iter()
             .filter_map(|step| match step {
@@ -715,7 +715,7 @@ mod tests {
     #[test]
     fn step_frames_resumes_waits_then_pauses() {
         assert_eq!(
-            expand(r#"{"cmd":"step_frames","frames":3}"#),
+            expand(r#"{"command":"step_frames","frames":3}"#),
             vec![
                 DriverStep::BeginSteppedFrames,
                 DriverStep::WaitFrames(3),
@@ -728,25 +728,25 @@ mod tests {
     #[test]
     fn seed_time_and_state_commands_end_with_a_barrier() {
         assert_eq!(
-            expand(r#"{"cmd":"set_seed","seed":9}"#),
+            expand(r#"{"command":"set_seed","seed":9}"#),
             vec![DriverStep::SetSeed(9), DriverStep::EndFrame]
         );
         assert_eq!(
-            expand(r#"{"cmd":"time_fixed_step","ms":20}"#),
+            expand(r#"{"command":"time_fixed_step","milliseconds":20}"#),
             vec![
                 DriverStep::Time(TimeControlAction::FixedStep { milliseconds: 20.0 }),
                 DriverStep::EndFrame
             ]
         );
         assert_eq!(
-            expand(r#"{"cmd":"time_speed","factor":2}"#),
+            expand(r#"{"command":"time_speed","factor":2}"#),
             vec![
                 DriverStep::Time(TimeControlAction::SetSpeed(2.0)),
                 DriverStep::EndFrame
             ]
         );
         assert_eq!(
-            expand(r#"{"cmd":"load_state","path":"slot.txt"}"#),
+            expand(r#"{"command":"load_state","path":"slot.txt"}"#),
             vec![
                 DriverStep::State {
                     operation: StateOperation::Load,
@@ -760,12 +760,12 @@ mod tests {
     #[test]
     fn expect_ends_the_frame_before_the_check() {
         assert_eq!(
-            expand(r#"{"cmd":"expect","check":"hp","equals":3}"#),
+            expand(r#"{"command":"expect","check":"hp","equals":3}"#),
             vec![
                 DriverStep::EndFrame,
                 DriverStep::Check {
                     check: "hp".to_owned(),
-                    args: Value::Null,
+                    arguments: Value::Null,
                     equals: Some(Value::from(3)),
                 }
             ]
@@ -775,14 +775,14 @@ mod tests {
     #[test]
     fn window_commands_end_with_a_barrier() {
         assert_eq!(
-            expand(r#"{"cmd":"window_minimize"}"#),
+            expand(r#"{"command":"window_minimize"}"#),
             vec![
                 DriverStep::Window(WindowAction::Minimize),
                 DriverStep::EndFrame
             ]
         );
         assert_eq!(
-            expand(r#"{"cmd":"window_restore"}"#),
+            expand(r#"{"command":"window_restore"}"#),
             vec![
                 DriverStep::Window(WindowAction::Restore),
                 DriverStep::EndFrame
@@ -793,7 +793,7 @@ mod tests {
     #[test]
     fn real_input_ends_with_a_barrier() {
         assert_eq!(
-            expand(r#"{"cmd":"real_input","blocked":false}"#),
+            expand(r#"{"command":"real_input","blocked":false}"#),
             vec![
                 DriverStep::RealInput { blocked: false },
                 DriverStep::EndFrame
@@ -834,7 +834,7 @@ mod tests {
     #[test]
     fn wait_until_drawn_ends_with_a_barrier() {
         assert_eq!(
-            expand(r#"{"cmd":"wait_until_drawn","timeout_seconds":5}"#),
+            expand(r#"{"command":"wait_until_drawn","timeout_seconds":5}"#),
             vec![
                 DriverStep::WaitUntilDrawn {
                     timeout_seconds: 5.0,
@@ -945,9 +945,9 @@ mod tests {
     #[test]
     fn pointer_commands_end_with_two_barriers() {
         for text in [
-            r#"{"cmd":"click"}"#,
-            r#"{"cmd":"scroll","y":1}"#,
-            r#"{"cmd":"touch","phase":"ended","x":1,"y":1}"#,
+            r#"{"command":"click"}"#,
+            r#"{"command":"scroll","y":1}"#,
+            r#"{"command":"touch","phase":"ended","x":1,"y":1}"#,
         ] {
             let steps = expand(text);
             let tail = &steps[steps.len() - 2..];

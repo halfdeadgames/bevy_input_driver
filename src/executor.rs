@@ -221,9 +221,9 @@ fn apply_step(
         DriverStep::Quit => queue_quit(commands),
         DriverStep::Check {
             check,
-            args,
+            arguments,
             equals,
-        } => queue_check(commands, check.clone(), args.clone(), equals.clone()),
+        } => queue_check(commands, check.clone(), arguments.clone(), equals.clone()),
         DriverStep::SetSeed(seed) => queue_set_seed(commands, *seed),
         DriverStep::Time(action) => queue_time_action(commands, *action),
         DriverStep::State { operation, path } => {

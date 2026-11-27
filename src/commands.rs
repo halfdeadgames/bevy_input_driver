@@ -14,13 +14,13 @@ pub type LogicalPoint = [f32; 2];
 const DEFAULT_TAP_HOLD_FRAMES: u32 = 1;
 const DEFAULT_DRAG_FRAMES: u32 = 10;
 /// Largest frame count one command may use.
-pub const MAX_COMMAND_FRAMES: u32 = 100_000;
+pub const MAXIMUM_COMMAND_FRAMES: u32 = 100_000;
 /// Seconds `wait_until_drawn` waits when the command gives no `timeout_seconds`.
 pub const DEFAULT_DRAWN_TIMEOUT_SECONDS: f32 = 60.0;
 /// Largest `timeout_seconds` a `wait_until_drawn` command may use.
-pub const MAX_DRAWN_TIMEOUT_SECONDS: f32 = 3600.0;
+pub const MAXIMUM_DRAWN_TIMEOUT_SECONDS: f32 = 3600.0;
 /// Largest `settle_frames` a `wait_until_drawn` command may use.
-pub const MAX_DRAWN_SETTLE_FRAMES: u32 = 600;
+pub const MAXIMUM_DRAWN_SETTLE_FRAMES: u32 = 600;
 
 fn default_hold_frames() -> u32 {
     DEFAULT_TAP_HOLD_FRAMES
@@ -69,7 +69,7 @@ pub enum TouchCommandPhase {
 
 /// One input or control command, as written in JSON.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(tag = "cmd", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DriverCommand {
     /// Press a key and keep it held.
     KeyDown {
@@ -260,7 +260,7 @@ pub enum DriverCommand {
     /// Make every frame advance time by exactly this many milliseconds.
     TimeFixedStep {
         /// Milliseconds per frame. Must be finite and above 0.
-        ms: f64,
+        milliseconds: f64,
     },
     /// Return to automatic real-time updates and speed 1.0, without unpausing.
     TimeReal {},
@@ -286,7 +286,7 @@ pub enum DriverCommand {
         check: String,
         /// Input handed to the check; `null` when absent.
         #[serde(default)]
-        args: Option<Value>,
+        arguments: Option<Value>,
         /// Value the check must return. Numbers compare by numeric value, everything else
         /// exactly. An explicit `null` expects null. Without it, any returned value passes.
         #[serde(default, deserialize_with = "deserialize_present_value")]
@@ -295,9 +295,11 @@ pub enum DriverCommand {
 }
 
 // Plain `Option<Value>` turns a present `null` into `None`; a present field must stay `Some`.
-fn deserialize_present_value<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+fn deserialize_present_value<'de, DeserializerType>(
+    deserializer: DeserializerType,
+) -> Result<Option<Value>, DeserializerType::Error>
 where
-    D: serde::Deserializer<'de>,
+    DeserializerType: serde::Deserializer<'de>,
 {
     Value::deserialize(deserializer).map(Some)
 }
@@ -347,19 +349,21 @@ impl DriverCommand {
             }
             Self::WaitUntilDrawn {
                 timeout_seconds, ..
-            } if !(*timeout_seconds > 0.0 && *timeout_seconds <= MAX_DRAWN_TIMEOUT_SECONDS) => {
+            } if !(*timeout_seconds > 0.0 && *timeout_seconds <= MAXIMUM_DRAWN_TIMEOUT_SECONDS) => {
                 Some("wait_until_drawn timeout_seconds must be above 0 and at most 3600")
             }
             Self::WaitUntilDrawn { settle_frames, .. }
-                if !(1..=MAX_DRAWN_SETTLE_FRAMES).contains(settle_frames) =>
+                if !(1..=MAXIMUM_DRAWN_SETTLE_FRAMES).contains(settle_frames) =>
             {
                 Some("wait_until_drawn settle_frames must be from 1 to 600")
             }
             Self::TimeSpeed { factor } if !factor.is_finite() || *factor <= 0.0 => {
                 Some("time_speed factor must be a finite number above 0")
             }
-            Self::TimeFixedStep { ms } if !ms.is_finite() || *ms <= 0.0 => {
-                Some("time_fixed_step ms must be a finite number above 0")
+            Self::TimeFixedStep { milliseconds }
+                if !milliseconds.is_finite() || *milliseconds <= 0.0 =>
+            {
+                Some("time_fixed_step milliseconds must be a finite number above 0")
             }
             Self::StepFrames { frames: 0 } => Some("step_frames frames must be at least 1"),
             _ => None,
@@ -380,8 +384,8 @@ impl DriverCommand {
             Self::WaitFrames { frames } => ("wait_frames frames", *frames),
             _ => return None,
         };
-        (frames > MAX_COMMAND_FRAMES)
-            .then(|| format!("{name} must be at most {MAX_COMMAND_FRAMES}, got {frames}"))
+        (frames > MAXIMUM_COMMAND_FRAMES)
+            .then(|| format!("{name} must be at most {MAXIMUM_COMMAND_FRAMES}, got {frames}"))
     }
 }
 
@@ -389,7 +393,7 @@ impl DriverCommand {
 ///
 /// # Errors
 ///
-/// Returns [`CommandParseError`] for malformed JSON, an unknown `cmd`, an unknown field, a
+/// Returns [`CommandParseError`] for malformed JSON, an unknown `command`, an unknown field, a
 /// missing field, or an unusable value.
 pub fn parse_command_text(text: &str) -> Result<DriverCommand, CommandParseError> {
     serde_json::from_str::<DriverCommand>(text)
@@ -419,20 +423,20 @@ mod tests {
     #[test]
     fn parses_keyboard_commands_with_defaults() {
         assert_eq!(
-            parse(r#"{"cmd":"key_down","key":"KeyA"}"#),
+            parse(r#"{"command":"key_down","key":"KeyA"}"#),
             DriverCommand::KeyDown {
                 key: KeyCode::KeyA,
                 text: None
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"key_up","key":"Space"}"#),
+            parse(r#"{"command":"key_up","key":"Space"}"#),
             DriverCommand::KeyUp {
                 key: KeyCode::Space
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"key_tap","key":"Enter"}"#),
+            parse(r#"{"command":"key_tap","key":"Enter"}"#),
             DriverCommand::KeyTap {
                 key: KeyCode::Enter,
                 text: None,
@@ -440,7 +444,7 @@ mod tests {
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"key_tap","key":"KeyB","text":"b","hold_frames":3}"#),
+            parse(r#"{"command":"key_tap","key":"KeyB","text":"b","hold_frames":3}"#),
             DriverCommand::KeyTap {
                 key: KeyCode::KeyB,
                 text: Some("b".to_owned()),
@@ -448,7 +452,7 @@ mod tests {
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"type_text","text":"hi"}"#),
+            parse(r#"{"command":"type_text","text":"hi"}"#),
             DriverCommand::TypeText {
                 text: "hi".to_owned()
             }
@@ -458,23 +462,23 @@ mod tests {
     #[test]
     fn parses_mouse_commands_with_defaults() {
         assert_eq!(
-            parse(r#"{"cmd":"mouse_move","x":1.5,"y":2}"#),
+            parse(r#"{"command":"mouse_move","x":1.5,"y":2}"#),
             DriverCommand::MouseMove { x: 1.5, y: 2.0 }
         );
         assert_eq!(
-            parse(r#"{"cmd":"mouse_down"}"#),
+            parse(r#"{"command":"mouse_down"}"#),
             DriverCommand::MouseDown {
                 button: MouseButton::Left
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"mouse_up","button":"Right"}"#),
+            parse(r#"{"command":"mouse_up","button":"Right"}"#),
             DriverCommand::MouseUp {
                 button: MouseButton::Right
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"click","x":10,"y":20,"button":"Middle"}"#),
+            parse(r#"{"command":"click","x":10,"y":20,"button":"Middle"}"#),
             DriverCommand::Click {
                 button: MouseButton::Middle,
                 x: Some(10.0),
@@ -482,7 +486,7 @@ mod tests {
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"drag","from":[1,2],"to":[3,4]}"#),
+            parse(r#"{"command":"drag","from":[1,2],"to":[3,4]}"#),
             DriverCommand::Drag {
                 from: [1.0, 2.0],
                 to: [3.0, 4.0],
@@ -495,7 +499,7 @@ mod tests {
     #[test]
     fn parses_scroll_touch_and_gesture_commands() {
         assert_eq!(
-            parse(r#"{"cmd":"scroll"}"#),
+            parse(r#"{"command":"scroll"}"#),
             DriverCommand::Scroll {
                 x: 0.0,
                 y: 0.0,
@@ -503,7 +507,7 @@ mod tests {
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"scroll","y":-3,"unit":"pixel"}"#),
+            parse(r#"{"command":"scroll","y":-3,"unit":"pixel"}"#),
             DriverCommand::Scroll {
                 x: 0.0,
                 y: -3.0,
@@ -511,7 +515,7 @@ mod tests {
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"touch","phase":"started","x":5,"y":6}"#),
+            parse(r#"{"command":"touch","phase":"started","x":5,"y":6}"#),
             DriverCommand::Touch {
                 phase: TouchCommandPhase::Started,
                 x: 5.0,
@@ -520,7 +524,7 @@ mod tests {
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"touch_drag","from":[0,0],"to":[9,9],"id":2}"#),
+            parse(r#"{"command":"touch_drag","from":[0,0],"to":[9,9],"id":2}"#),
             DriverCommand::TouchDrag {
                 from: [0.0, 0.0],
                 to: [9.0, 9.0],
@@ -529,19 +533,19 @@ mod tests {
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"pinch","delta":0.5}"#),
+            parse(r#"{"command":"pinch","delta":0.5}"#),
             DriverCommand::Pinch { delta: 0.5 }
         );
         assert_eq!(
-            parse(r#"{"cmd":"rotate","delta":-1}"#),
+            parse(r#"{"command":"rotate","delta":-1}"#),
             DriverCommand::Rotate { delta: -1.0 }
         );
         assert_eq!(
-            parse(r#"{"cmd":"pan","x":1,"y":2}"#),
+            parse(r#"{"command":"pan","x":1,"y":2}"#),
             DriverCommand::Pan { x: 1.0, y: 2.0 }
         );
         assert_eq!(
-            parse(r#"{"cmd":"double_tap"}"#),
+            parse(r#"{"command":"double_tap"}"#),
             DriverCommand::DoubleTap {}
         );
     }
@@ -549,100 +553,105 @@ mod tests {
     #[test]
     fn parses_control_commands() {
         assert_eq!(
-            parse(r#"{"cmd":"wait_frames","frames":4}"#),
+            parse(r#"{"command":"wait_frames","frames":4}"#),
             DriverCommand::WaitFrames { frames: 4 }
         );
         assert_eq!(
-            parse(r#"{"cmd":"wait_seconds","seconds":0.25}"#),
+            parse(r#"{"command":"wait_seconds","seconds":0.25}"#),
             DriverCommand::WaitSeconds { seconds: 0.25 }
         );
         assert_eq!(
-            parse(r#"{"cmd":"wait_until_drawn"}"#),
+            parse(r#"{"command":"wait_until_drawn"}"#),
             DriverCommand::WaitUntilDrawn {
                 timeout_seconds: DEFAULT_DRAWN_TIMEOUT_SECONDS,
                 settle_frames: SETTLED_RENDER_FRAMES,
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"wait_until_drawn","timeout_seconds":5,"settle_frames":1}"#),
+            parse(r#"{"command":"wait_until_drawn","timeout_seconds":5,"settle_frames":1}"#),
             DriverCommand::WaitUntilDrawn {
                 timeout_seconds: 5.0,
                 settle_frames: 1,
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"screenshot","path":"shots/a.png"}"#),
+            parse(r#"{"command":"screenshot","path":"shots/a.png"}"#),
             DriverCommand::Screenshot {
                 path: "shots/a.png".to_owned()
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"release_all"}"#),
+            parse(r#"{"command":"release_all"}"#),
             DriverCommand::ReleaseAll {}
         );
-        assert_eq!(parse(r#"{"cmd":"quit"}"#), DriverCommand::Quit {});
+        assert_eq!(parse(r#"{"command":"quit"}"#), DriverCommand::Quit {});
         assert_eq!(
-            parse(r#"{"cmd":"window_minimize"}"#),
+            parse(r#"{"command":"window_minimize"}"#),
             DriverCommand::WindowMinimize {}
         );
         assert_eq!(
-            parse(r#"{"cmd":"window_restore"}"#),
+            parse(r#"{"command":"window_restore"}"#),
             DriverCommand::WindowRestore {}
         );
-        assert!(parse_command_text(r#"{"cmd":"window_minimize","extra":1}"#).is_err());
-        assert!(parse_command_text(r#"{"cmd":"window_restore","extra":1}"#).is_err());
+        assert!(parse_command_text(r#"{"command":"window_minimize","extra":1}"#).is_err());
+        assert!(parse_command_text(r#"{"command":"window_restore","extra":1}"#).is_err());
     }
 
     #[test]
     fn parses_real_input_with_a_required_flag() {
         assert_eq!(
-            parse(r#"{"cmd":"real_input","blocked":false}"#),
+            parse(r#"{"command":"real_input","blocked":false}"#),
             DriverCommand::RealInput { blocked: false }
         );
         assert_eq!(
-            parse(r#"{"cmd":"real_input","blocked":true}"#),
+            parse(r#"{"command":"real_input","blocked":true}"#),
             DriverCommand::RealInput { blocked: true }
         );
-        assert!(parse_command_text(r#"{"cmd":"real_input"}"#).is_err());
-        assert!(parse_command_text(r#"{"cmd":"real_input","blocked":"yes"}"#).is_err());
-        assert!(parse_command_text(r#"{"cmd":"real_input","blocked":true,"extra":1}"#).is_err());
+        assert!(parse_command_text(r#"{"command":"real_input"}"#).is_err());
+        assert!(parse_command_text(r#"{"command":"real_input","blocked":"yes"}"#).is_err());
+        assert!(
+            parse_command_text(r#"{"command":"real_input","blocked":true,"extra":1}"#).is_err()
+        );
     }
 
     #[test]
     fn parses_seed_time_and_state_commands() {
         assert_eq!(
-            parse(r#"{"cmd":"set_seed","seed":18446744073709551615}"#),
+            parse(r#"{"command":"set_seed","seed":18446744073709551615}"#),
             DriverCommand::SetSeed { seed: u64::MAX }
         );
         assert_eq!(
-            parse(r#"{"cmd":"time_pause"}"#),
+            parse(r#"{"command":"time_pause"}"#),
             DriverCommand::TimePause {}
         );
         assert_eq!(
-            parse(r#"{"cmd":"time_resume"}"#),
+            parse(r#"{"command":"time_resume"}"#),
             DriverCommand::TimeResume {}
         );
         assert_eq!(
-            parse(r#"{"cmd":"time_speed","factor":0.5}"#),
+            parse(r#"{"command":"time_speed","factor":0.5}"#),
             DriverCommand::TimeSpeed { factor: 0.5 }
         );
         assert_eq!(
-            parse(r#"{"cmd":"time_fixed_step","ms":16.5}"#),
-            DriverCommand::TimeFixedStep { ms: 16.5 }
+            parse(r#"{"command":"time_fixed_step","milliseconds":16.5}"#),
+            DriverCommand::TimeFixedStep { milliseconds: 16.5 }
         );
-        assert_eq!(parse(r#"{"cmd":"time_real"}"#), DriverCommand::TimeReal {});
         assert_eq!(
-            parse(r#"{"cmd":"step_frames","frames":3}"#),
+            parse(r#"{"command":"time_real"}"#),
+            DriverCommand::TimeReal {}
+        );
+        assert_eq!(
+            parse(r#"{"command":"step_frames","frames":3}"#),
             DriverCommand::StepFrames { frames: 3 }
         );
         assert_eq!(
-            parse(r#"{"cmd":"save_state","path":"slot.txt"}"#),
+            parse(r#"{"command":"save_state","path":"slot.txt"}"#),
             DriverCommand::SaveState {
                 path: "slot.txt".to_owned()
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"load_state","path":"slot.txt"}"#),
+            parse(r#"{"command":"load_state","path":"slot.txt"}"#),
             DriverCommand::LoadState {
                 path: "slot.txt".to_owned()
             }
@@ -650,73 +659,73 @@ mod tests {
     }
 
     #[test]
-    fn parses_expect_with_and_without_args_and_equals() {
+    fn parses_expect_with_and_without_arguments_and_equals() {
         assert_eq!(
-            parse(r#"{"cmd":"expect","check":"alive"}"#),
+            parse(r#"{"command":"expect","check":"alive"}"#),
             DriverCommand::Expect {
                 check: "alive".to_owned(),
-                args: None,
+                arguments: None,
                 equals: None
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"expect","check":"hp","args":{"who":1},"equals":[5,6.5]}"#),
+            parse(r#"{"command":"expect","check":"hp","arguments":{"who":1},"equals":[5,6.5]}"#),
             DriverCommand::Expect {
                 check: "hp".to_owned(),
-                args: Some(serde_json::json!({"who": 1})),
+                arguments: Some(serde_json::json!({"who": 1})),
                 equals: Some(serde_json::json!([5, 6.5]))
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"expect","check":"flag","equals":false}"#),
+            parse(r#"{"command":"expect","check":"flag","equals":false}"#),
             DriverCommand::Expect {
                 check: "flag".to_owned(),
-                args: None,
+                arguments: None,
                 equals: Some(Value::Bool(false))
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"expect","check":"flag","equals":null}"#),
+            parse(r#"{"command":"expect","check":"flag","equals":null}"#),
             DriverCommand::Expect {
                 check: "flag".to_owned(),
-                args: None,
+                arguments: None,
                 equals: Some(Value::Null)
             }
         );
         assert_eq!(
-            parse(r#"{"cmd":"expect","check":"flag","equals":5}"#),
+            parse(r#"{"command":"expect","check":"flag","equals":5}"#),
             DriverCommand::Expect {
                 check: "flag".to_owned(),
-                args: None,
+                arguments: None,
                 equals: Some(serde_json::json!(5))
             }
         );
-        assert!(parse_command_text(r#"{"cmd":"expect"}"#).is_err());
-        assert!(parse_command_text(r#"{"cmd":"expect","check":"a","extra":1}"#).is_err());
+        assert!(parse_command_text(r#"{"command":"expect"}"#).is_err());
+        assert!(parse_command_text(r#"{"command":"expect","check":"a","extra":1}"#).is_err());
     }
 
     #[test]
     fn rejects_unusable_seed_time_and_state_values() {
-        assert!(parse_command_text(r#"{"cmd":"set_seed"}"#).is_err());
-        assert!(parse_command_text(r#"{"cmd":"set_seed","seed":-1}"#).is_err());
-        assert!(parse_command_text(r#"{"cmd":"time_speed","factor":0}"#).is_err());
-        assert!(parse_command_text(r#"{"cmd":"time_speed","factor":-2}"#).is_err());
-        assert!(parse_command_text(r#"{"cmd":"time_speed"}"#).is_err());
-        assert!(parse_command_text(r#"{"cmd":"time_fixed_step","ms":0}"#).is_err());
-        assert!(parse_command_text(r#"{"cmd":"time_fixed_step","ms":-16}"#).is_err());
-        assert!(parse_command_text(r#"{"cmd":"step_frames","frames":0}"#).is_err());
-        assert!(parse_command_text(r#"{"cmd":"save_state"}"#).is_err());
-        assert!(parse_command_text(r#"{"cmd":"load_state","path":"a","extra":1}"#).is_err());
+        assert!(parse_command_text(r#"{"command":"set_seed"}"#).is_err());
+        assert!(parse_command_text(r#"{"command":"set_seed","seed":-1}"#).is_err());
+        assert!(parse_command_text(r#"{"command":"time_speed","factor":0}"#).is_err());
+        assert!(parse_command_text(r#"{"command":"time_speed","factor":-2}"#).is_err());
+        assert!(parse_command_text(r#"{"command":"time_speed"}"#).is_err());
+        assert!(parse_command_text(r#"{"command":"time_fixed_step","milliseconds":0}"#).is_err());
+        assert!(parse_command_text(r#"{"command":"time_fixed_step","milliseconds":-16}"#).is_err());
+        assert!(parse_command_text(r#"{"command":"step_frames","frames":0}"#).is_err());
+        assert!(parse_command_text(r#"{"command":"save_state"}"#).is_err());
+        assert!(parse_command_text(r#"{"command":"load_state","path":"a","extra":1}"#).is_err());
     }
 
     #[test]
     fn rejects_unknown_command_and_unknown_field() {
-        let unknown_command = parse_command_text(r#"{"cmd":"teleport"}"#)
+        let unknown_command = parse_command_text(r#"{"command":"teleport"}"#)
             .expect_err("unknown command should fail")
             .to_string();
         assert!(unknown_command.contains("teleport"), "{unknown_command}");
 
-        let unknown_field = parse_command_text(r#"{"cmd":"key_up","key":"KeyA","extra":1}"#)
+        let unknown_field = parse_command_text(r#"{"command":"key_up","key":"KeyA","extra":1}"#)
             .expect_err("unknown field should fail")
             .to_string();
         assert!(unknown_field.contains("extra"), "{unknown_field}");
@@ -724,18 +733,21 @@ mod tests {
 
     #[test]
     fn rejects_unusable_values() {
-        assert!(parse_command_text(r#"{"cmd":"key_tap","key":"KeyA","hold_frames":0}"#).is_err());
         assert!(
-            parse_command_text(r#"{"cmd":"drag","from":[0,0],"to":[1,1],"frames":0}"#).is_err()
+            parse_command_text(r#"{"command":"key_tap","key":"KeyA","hold_frames":0}"#).is_err()
         );
-        assert!(parse_command_text(r#"{"cmd":"click","x":1}"#).is_err());
-        assert!(parse_command_text(r#"{"cmd":"wait_seconds","seconds":-1}"#).is_err());
+        assert!(
+            parse_command_text(r#"{"command":"drag","from":[0,0],"to":[1,1],"frames":0}"#).is_err()
+        );
+        assert!(parse_command_text(r#"{"command":"click","x":1}"#).is_err());
+        assert!(parse_command_text(r#"{"command":"wait_seconds","seconds":-1}"#).is_err());
         for timeout in ["0", "-1", "3601"] {
-            let text = format!(r#"{{"cmd":"wait_until_drawn","timeout_seconds":{timeout}}}"#);
+            let text = format!(r#"{{"command":"wait_until_drawn","timeout_seconds":{timeout}}}"#);
             assert!(parse_command_text(&text).is_err(), "{text}");
         }
         for settle_frames in ["0", "601"] {
-            let text = format!(r#"{{"cmd":"wait_until_drawn","settle_frames":{settle_frames}}}"#);
+            let text =
+                format!(r#"{{"command":"wait_until_drawn","settle_frames":{settle_frames}}}"#);
             assert!(parse_command_text(&text).is_err(), "{text}");
         }
     }
@@ -743,17 +755,23 @@ mod tests {
     #[test]
     fn rejects_frame_counts_above_the_cap() {
         for text in [
-            r#"{"cmd":"key_tap","key":"KeyA","hold_frames":100001}"#,
-            r#"{"cmd":"drag","from":[0,0],"to":[1,1],"frames":4000000000}"#,
-            r#"{"cmd":"touch_drag","from":[0,0],"to":[1,1],"frames":100001}"#,
-            r#"{"cmd":"step_frames","frames":100001}"#,
-            r#"{"cmd":"wait_frames","frames":100001}"#,
+            r#"{"command":"key_tap","key":"KeyA","hold_frames":100001}"#,
+            r#"{"command":"drag","from":[0,0],"to":[1,1],"frames":4000000000}"#,
+            r#"{"command":"touch_drag","from":[0,0],"to":[1,1],"frames":100001}"#,
+            r#"{"command":"step_frames","frames":100001}"#,
+            r#"{"command":"wait_frames","frames":100001}"#,
         ] {
             let message = parse_command_text(text)
                 .expect_err("count above the cap should fail")
                 .to_string();
             assert!(message.contains("at most 100000"), "{message}");
         }
-        assert!(parse_command_text(r#"{"cmd":"wait_frames","frames":100000}"#).is_ok());
+        assert!(parse_command_text(r#"{"command":"wait_frames","frames":100000}"#).is_ok());
+    }
+
+    #[test]
+    fn rejects_the_old_command_and_millisecond_keys() {
+        assert!(parse_command_text(r#"{"cmd":"quit"}"#).is_err());
+        assert!(parse_command_text(r#"{"command":"time_fixed_step","ms":16}"#).is_err());
     }
 }

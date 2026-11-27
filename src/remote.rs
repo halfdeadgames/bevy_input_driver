@@ -126,7 +126,7 @@ impl Plugin for DriverRemotePlugin {
     }
 }
 
-fn invalid_params(message: String) -> BrpError {
+fn invalid_parameters_error(message: String) -> BrpError {
     BrpError {
         code: error_codes::INVALID_PARAMS,
         message,
@@ -139,23 +139,24 @@ fn invalid_params(message: String) -> BrpError {
 /// # Errors
 ///
 /// Returns a [`BrpError`] with the invalid-params code naming the failing array index.
-pub fn parse_send_params(params: Option<Value>) -> Result<Vec<DriverCommand>, BrpError> {
-    match params {
-        None | Some(Value::Null) => Err(invalid_params(
+pub fn parse_send_parameters(parameters: Option<Value>) -> Result<Vec<DriverCommand>, BrpError> {
+    match parameters {
+        None | Some(Value::Null) => Err(invalid_parameters_error(
             "drive/send needs params: a command object or an array of command objects".to_owned(),
         )),
         Some(Value::Array(items)) => items
             .into_iter()
             .enumerate()
             .map(|(index, item)| {
-                parse_command_value(item)
-                    .map_err(|problem| invalid_params(format!("command {index}: {problem}")))
+                parse_command_value(item).map_err(|problem| {
+                    invalid_parameters_error(format!("command {index}: {problem}"))
+                })
             })
             .collect(),
         Some(single @ Value::Object(_)) => parse_command_value(single)
             .map(|command| vec![command])
-            .map_err(|problem| invalid_params(format!("command: {problem}"))),
-        Some(other) => Err(invalid_params(format!(
+            .map_err(|problem| invalid_parameters_error(format!("command: {problem}"))),
+        Some(other) => Err(invalid_parameters_error(format!(
             "drive/send params must be an object or an array, got {other}"
         ))),
     }
@@ -166,11 +167,11 @@ fn status_json(status: &DriverStatus) -> BrpResult {
 }
 
 fn send_commands_method(
-    In(params): In<Option<Value>>,
+    In(parameters): In<Option<Value>>,
     mut queue: ResMut<DriverQueue>,
     mut blocking: ResMut<RealInputBlocking>,
 ) -> BrpResult {
-    let commands = parse_send_params(params)?;
+    let commands = parse_send_parameters(parameters)?;
     queue.enqueue_commands(&commands);
     if !commands.is_empty() {
         blocking.block_for_first_command();
@@ -179,7 +180,7 @@ fn send_commands_method(
 }
 
 fn status_method(
-    In(_params): In<Option<Value>>,
+    In(_parameters): In<Option<Value>>,
     mut status: ResMut<DriverStatus>,
     queue: Res<DriverQueue>,
     blocking: Res<RealInputBlocking>,
@@ -190,7 +191,7 @@ fn status_method(
 }
 
 fn clear_method(
-    In(_params): In<Option<Value>>,
+    In(_parameters): In<Option<Value>>,
     mut status: ResMut<DriverStatus>,
     mut queue: ResMut<DriverQueue>,
     blocking: Res<RealInputBlocking>,
@@ -207,29 +208,32 @@ mod tests {
 
     #[test]
     fn accepts_one_object_or_an_array() {
-        let one = parse_send_params(Some(json!({"cmd": "quit"}))).expect("object should parse");
+        let one =
+            parse_send_parameters(Some(json!({"command": "quit"}))).expect("object should parse");
         assert_eq!(one, vec![DriverCommand::Quit {}]);
-        let many = parse_send_params(Some(json!([{"cmd": "quit"}, {"cmd": "release_all"}])))
-            .expect("array should parse");
+        let many = parse_send_parameters(Some(
+            json!([{"command": "quit"}, {"command": "release_all"}]),
+        ))
+        .expect("array should parse");
         assert_eq!(many.len(), 2);
     }
 
     #[test]
     fn rejects_everything_when_one_command_is_bad() {
-        let error = parse_send_params(Some(json!([{"cmd": "quit"}, {"cmd": "nope"}])))
+        let error = parse_send_parameters(Some(json!([{"command": "quit"}, {"command": "nope"}])))
             .expect_err("bad command should fail");
         assert_eq!(error.code, error_codes::INVALID_PARAMS);
         assert!(error.message.contains("command 1"), "{}", error.message);
     }
 
-    fn echo_params(In(params): In<Option<Value>>) -> BrpResult {
-        Ok(params.unwrap_or(Value::Null))
+    fn echo_parameters(In(parameters): In<Option<Value>>) -> BrpResult {
+        Ok(parameters.unwrap_or(Value::Null))
     }
 
     #[test]
     fn game_methods_registered_before_the_remote_plugin_are_added_when_it_builds() {
         let mut app = App::new();
-        register_remote_method(&mut app, "game/echo".to_owned(), echo_params);
+        register_remote_method(&mut app, "game/echo".to_owned(), echo_parameters);
         app.add_plugins(RemotePlugin::default());
         drain_pending_remote_methods(app.world_mut());
         let methods = app.world().resource::<RemoteMethods>();
@@ -241,7 +245,7 @@ mod tests {
     fn game_methods_registered_after_the_remote_plugin_are_added_at_once() {
         let mut app = App::new();
         app.add_plugins(RemotePlugin::default());
-        register_remote_method(&mut app, "game/echo".to_owned(), echo_params);
+        register_remote_method(&mut app, "game/echo".to_owned(), echo_parameters);
         let methods = app.world().resource::<RemoteMethods>();
         assert!(methods.get("game/echo").is_some());
         assert!(app.world().get_resource::<PendingRemoteMethods>().is_none());
@@ -250,7 +254,7 @@ mod tests {
     #[test]
     fn startup_serves_pending_methods_for_a_remote_plugin_added_afterward() {
         let mut app = App::new();
-        register_remote_method(&mut app, "game/echo".to_owned(), echo_params);
+        register_remote_method(&mut app, "game/echo".to_owned(), echo_parameters);
         app.add_plugins(RemotePlugin::default());
         app.world_mut().run_schedule(Startup);
         let methods = app.world().resource::<RemoteMethods>();
@@ -261,7 +265,7 @@ mod tests {
     #[test]
     fn startup_without_a_remote_plugin_keeps_the_pending_methods() {
         let mut app = App::new();
-        register_remote_method(&mut app, "game/echo".to_owned(), echo_params);
+        register_remote_method(&mut app, "game/echo".to_owned(), echo_parameters);
         app.world_mut().run_schedule(Startup);
         assert!(app.world().get_resource::<PendingRemoteMethods>().is_some());
     }
@@ -281,16 +285,16 @@ mod tests {
         );
         let driver_id = instant_id(app.world().resource::<RemoteMethods>(), SEND_METHOD);
         assert!(driver_id.is_some());
-        register_remote_method(&mut app, SEND_METHOD.to_owned(), echo_params);
-        register_remote_method(&mut app, "drive/other".to_owned(), echo_params);
+        register_remote_method(&mut app, SEND_METHOD.to_owned(), echo_parameters);
+        register_remote_method(&mut app, "drive/other".to_owned(), echo_parameters);
         let methods = app.world().resource::<RemoteMethods>();
         assert_eq!(instant_id(methods, SEND_METHOD), driver_id);
         assert!(methods.get("drive/other").is_none());
     }
 
-    fn send_through_a_world(world: &mut World, params: Value) {
+    fn send_through_a_world(world: &mut World, parameters: Value) {
         world
-            .run_system_cached_with(send_commands_method, Some(params))
+            .run_system_cached_with(send_commands_method, Some(parameters))
             .expect("system should run")
             .expect("commands should be accepted");
     }
@@ -302,11 +306,11 @@ mod tests {
         world.init_resource::<RealInputBlocking>();
         assert!(!world.resource::<RealInputBlocking>().is_blocked());
 
-        send_through_a_world(&mut world, json!({"cmd": "release_all"}));
+        send_through_a_world(&mut world, json!({"command": "release_all"}));
         assert!(world.resource::<RealInputBlocking>().is_blocked());
 
         world.resource_mut::<RealInputBlocking>().set_blocked(false);
-        send_through_a_world(&mut world, json!([{"cmd": "release_all"}]));
+        send_through_a_world(&mut world, json!([{"command": "release_all"}]));
         assert!(!world.resource::<RealInputBlocking>().is_blocked());
     }
 
@@ -320,8 +324,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_and_scalar_params() {
-        assert!(parse_send_params(None).is_err());
-        assert!(parse_send_params(Some(json!(5))).is_err());
+    fn rejects_missing_and_scalar_parameters() {
+        assert!(parse_send_parameters(None).is_err());
+        assert!(parse_send_parameters(Some(json!(5))).is_err());
     }
 }

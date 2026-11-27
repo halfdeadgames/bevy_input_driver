@@ -8,7 +8,7 @@ use serde_json::{Number, Value};
 
 use crate::status::DriverStatus;
 
-/// One-shot system id of a check that receives the script's `args` and returns what it read.
+/// One-shot system id of a check that receives the script's `arguments` and returns what it read.
 pub type CheckSystemId = SystemId<In<Value>, Result<Value, String>>;
 
 /// The registered checks by name. Fill it with [`InputDriverAppExt::add_driver_check`].
@@ -73,11 +73,11 @@ impl CheckResult {
 }
 
 /// The most characters a failure message keeps.
-const MAX_MESSAGE_CHARS: usize = 1000;
+const MAXIMUM_MESSAGE_CHARACTERS: usize = 1000;
 
 // Counts chars, not bytes, so the cut never lands inside a multi-byte character.
 fn truncate_message(message: &str) -> String {
-    match message.char_indices().nth(MAX_MESSAGE_CHARS) {
+    match message.char_indices().nth(MAXIMUM_MESSAGE_CHARACTERS) {
         None => message.to_owned(),
         Some((cut, _)) => format!("{}...", &message[..cut]),
     }
@@ -120,12 +120,12 @@ impl fmt::Display for CheckError {
 
 impl std::error::Error for CheckError {}
 
-/// Runs the check registered as `name` with `args`.
+/// Runs the check registered as `name` with `arguments`.
 ///
 /// # Errors
 ///
 /// Returns [`CheckError`] when no check has that name, Bevy cannot run it, or it returns an error.
-pub fn run_check(world: &mut World, name: &str, args: Value) -> Result<Value, CheckError> {
+pub fn run_check(world: &mut World, name: &str, arguments: Value) -> Result<Value, CheckError> {
     let system = world
         .get_resource::<DriverChecks>()
         .and_then(|checks| checks.get(name))
@@ -137,7 +137,7 @@ pub fn run_check(world: &mut World, name: &str, args: Value) -> Result<Value, Ch
                 .unwrap_or_default(),
         })?;
     world
-        .run_system_with::<In<Value>, Result<Value, String>>(system, args)
+        .run_system_with::<In<Value>, Result<Value, String>>(system, arguments)
         .map_err(|problem| CheckError::CannotRun(problem.to_string()))?
         .map_err(CheckError::Failed)
 }
@@ -202,10 +202,10 @@ fn floats_equal(left: Option<f64>, right: Option<f64>) -> bool {
 pub fn evaluate_check(
     world: &mut World,
     name: &str,
-    args: Value,
+    arguments: Value,
     equals: Option<&Value>,
 ) -> CheckResult {
-    match run_check(world, name, args) {
+    match run_check(world, name, arguments) {
         Err(problem) => CheckResult::failed(name, None, &problem.to_string()),
         Ok(value) => match equals {
             Some(expected) if !json_values_equal(expected, &value) => {
@@ -218,9 +218,9 @@ pub fn evaluate_check(
 }
 
 /// Queues a world command that runs the check and records the result in [`DriverStatus`].
-pub fn queue_check(commands: &mut Commands, name: String, args: Value, equals: Option<Value>) {
+pub fn queue_check(commands: &mut Commands, name: String, arguments: Value, equals: Option<Value>) {
     commands.queue(move |world: &mut World| {
-        let result = evaluate_check(world, &name, args, equals.as_ref());
+        let result = evaluate_check(world, &name, arguments, equals.as_ref());
         world
             .resource_mut::<DriverStatus>()
             .note_check_result(result);
@@ -280,15 +280,15 @@ mod tests {
 
     use super::*;
 
-    fn returns_five(In(_args): In<Value>) -> Result<Value, String> {
+    fn returns_five(In(_arguments): In<Value>) -> Result<Value, String> {
         Ok(json!(5))
     }
 
-    fn echoes_args(In(args): In<Value>) -> Result<Value, String> {
-        Ok(args)
+    fn echoes_arguments(In(arguments): In<Value>) -> Result<Value, String> {
+        Ok(arguments)
     }
 
-    fn always_fails(In(_args): In<Value>) -> Result<Value, String> {
+    fn always_fails(In(_arguments): In<Value>) -> Result<Value, String> {
         Err("health is wrong".to_owned())
     }
 
@@ -297,14 +297,14 @@ mod tests {
         world.init_resource::<DriverStatus>();
         let mut checks = DriverChecks::default();
         checks.insert("five".to_owned(), world.register_system(returns_five));
-        checks.insert("echo".to_owned(), world.register_system(echoes_args));
+        checks.insert("echo".to_owned(), world.register_system(echoes_arguments));
         checks.insert("fail".to_owned(), world.register_system(always_fails));
         world.insert_resource(checks);
         world
     }
 
-    fn expect(world: &mut World, name: &str, args: Value, equals: Option<Value>) {
-        queue_check(&mut world.commands(), name.to_owned(), args, equals);
+    fn expect(world: &mut World, name: &str, arguments: Value, equals: Option<Value>) {
+        queue_check(&mut world.commands(), name.to_owned(), arguments, equals);
         world.flush();
     }
 
@@ -358,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn the_check_receives_the_script_args() {
+    fn the_check_receives_the_script_arguments() {
         let mut world = world_with_checks();
         expect(&mut world, "echo", json!({"who": 2}), None);
         assert_eq!(
@@ -398,7 +398,7 @@ mod tests {
         );
     }
 
-    fn returns_null(In(_args): In<Value>) -> Result<Value, String> {
+    fn returns_null(In(_arguments): In<Value>) -> Result<Value, String> {
         Ok(Value::Null)
     }
 
@@ -421,16 +421,20 @@ mod tests {
     }
 
     #[test]
-    fn long_messages_are_cut_at_a_char_boundary() {
-        let short = "a".repeat(MAX_MESSAGE_CHARS);
+    fn long_messages_are_cut_at_a_character_boundary() {
+        let short = "a".repeat(MAXIMUM_MESSAGE_CHARACTERS);
         assert_eq!(truncate_message(&short), short);
 
-        let long = format!("{}é{}", "a".repeat(MAX_MESSAGE_CHARS - 1), "b".repeat(50));
+        let long = format!(
+            "{}é{}",
+            "a".repeat(MAXIMUM_MESSAGE_CHARACTERS - 1),
+            "b".repeat(50)
+        );
         let cut = truncate_message(&long);
-        assert_eq!(cut.chars().count(), MAX_MESSAGE_CHARS + 3);
+        assert_eq!(cut.chars().count(), MAXIMUM_MESSAGE_CHARACTERS + 3);
         assert!(cut.ends_with("é..."), "{cut}");
 
-        let straddling = format!("{}éé", "a".repeat(MAX_MESSAGE_CHARS - 1));
+        let straddling = format!("{}éé", "a".repeat(MAXIMUM_MESSAGE_CHARACTERS - 1));
         assert!(truncate_message(&straddling).ends_with("é..."));
     }
 

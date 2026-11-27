@@ -18,11 +18,11 @@ class DriverUnreachable(Exception):
     """Raised when the game does not answer on the chosen port."""
 
 
-def call(port, method, params=None):
+def call(port, method, parameters=None):
     """Sends one JSON-RPC 2.0 request and returns the `result`, or exits 3 on a BRP error."""
     body = {"jsonrpc": "2.0", "id": 1, "method": method}
-    if params is not None:
-        body["params"] = params
+    if parameters is not None:
+        body["params"] = parameters
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/",
         data=json.dumps(body).encode("utf-8"),
@@ -85,16 +85,16 @@ def wait_until_idle(port, timeout, game_was_reachable=False):
         time.sleep(POLL_SECONDS)
 
 
-def send_commands(args, commands):
+def send_commands(arguments, commands):
     """Sends commands as one array, then optionally waits."""
-    print(json.dumps(call(args.port, "drive/send", commands), indent=2))
-    if args.wait:
-        finish_wait(args, game_was_reachable=True)
+    print(json.dumps(call(arguments.port, "drive/send", commands), indent=2))
+    if arguments.wait:
+        finish_wait(arguments, game_was_reachable=True)
 
 
-def finish_wait(args, game_was_reachable=False):
+def finish_wait(arguments, game_was_reachable=False):
     """Waits for idle and exits 1 on timeout."""
-    status = wait_until_idle(args.port, args.timeout, game_was_reachable)
+    status = wait_until_idle(arguments.port, arguments.timeout, game_was_reachable)
     if status is None:
         sys.exit(EXIT_TIMEOUT)
     print(json.dumps(status, indent=2))
@@ -144,25 +144,25 @@ def collect_send_commands(raw_arguments):
     return commands
 
 
-def run(args):
+def run(arguments):
     """Runs the chosen action."""
-    if args.action == "send":
-        send_commands(args, collect_send_commands(args.commands))
-    elif args.action == "send-file":
-        send_commands(args, read_commands_from_file(args.path))
-    elif args.action == "status":
-        print(json.dumps(call(args.port, "drive/status"), indent=2))
-    elif args.action == "clear":
-        print(json.dumps(call(args.port, "drive/clear"), indent=2))
-    elif args.action == "wait":
-        finish_wait(args)
+    if arguments.action == "send":
+        send_commands(arguments, collect_send_commands(arguments.commands))
+    elif arguments.action == "send-file":
+        send_commands(arguments, read_commands_from_file(arguments.path))
+    elif arguments.action == "status":
+        print(json.dumps(call(arguments.port, "drive/status"), indent=2))
+    elif arguments.action == "clear":
+        print(json.dumps(call(arguments.port, "drive/clear"), indent=2))
+    elif arguments.action == "wait":
+        finish_wait(arguments)
 
 
 def main():
     """Entry point."""
-    args = build_parser().parse_args()
+    arguments = build_parser().parse_args()
     try:
-        run(args)
+        run(arguments)
     except DriverUnreachable as problem:
         print(str(problem), file=sys.stderr)
         sys.exit(EXIT_UNREACHABLE)

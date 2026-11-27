@@ -9,8 +9,8 @@
 //! Add [`InputDriverPlugin`] to the app, typically behind a cargo feature.
 //!
 //! A game can make a launch script check itself. Register a check with
-//! [`InputDriverAppExt::add_driver_check`], then write `{"cmd":"expect","check":"name",
-//! "args":<optional>,"equals":<optional>}` in the script or in `drive/send`. Each result lands in
+//! [`InputDriverAppExt::add_driver_check`], then write `{"command":"expect","check":"name",
+//! "arguments":<optional>,"equals":<optional>}` in the script or in `drive/send`. Each result lands in
 //! the `checks` list of `drive/status`, every failure also adds an entry to `errors` and counts
 //! in `checks_failed`, and a `quit` exits with code 1 when `checks_failed` is above 0.
 //! [`InputDriverAppExt::add_driver_remote_method`] adds the game's own BRP methods.

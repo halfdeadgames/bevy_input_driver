@@ -14,9 +14,9 @@ use crate::{
     steps::DriverQueue,
 };
 
-const MAX_RECORDED_ERRORS: usize = 50;
-const MAX_RECORDED_STATE_OPERATIONS: usize = 50;
-const MAX_RECORDED_CHECKS: usize = 50;
+const MAXIMUM_RECORDED_ERRORS: usize = 50;
+const MAXIMUM_RECORDED_STATE_OPERATIONS: usize = 50;
+const MAXIMUM_RECORDED_CHECKS: usize = 50;
 
 /// A finger the driver put down and has not lifted.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -60,7 +60,7 @@ pub struct DriverStatus {
     /// first frame has finished.
     pub speed: f32,
     /// Milliseconds every frame advances by under `time_fixed_step`, or none under real time.
-    pub fixed_step_ms: Option<f64>,
+    pub fixed_step_milliseconds: Option<f64>,
     /// Seconds elapsed on `Time<Virtual>`. Refreshed once per frame.
     pub virtual_elapsed_seconds: f64,
     /// The most recent 50 finished `save_state` and `load_state` operations.
@@ -116,7 +116,7 @@ impl DriverStatus {
         let excess = self
             .state_operations
             .len()
-            .saturating_sub(MAX_RECORDED_STATE_OPERATIONS);
+            .saturating_sub(MAXIMUM_RECORDED_STATE_OPERATIONS);
         self.state_operations.drain(..excess);
     }
 }
@@ -131,7 +131,7 @@ impl DriverStatus {
             self.record_error(format!("expect {}: {reason}", result.check));
         }
         self.checks.push(result);
-        let excess = self.checks.len().saturating_sub(MAX_RECORDED_CHECKS);
+        let excess = self.checks.len().saturating_sub(MAXIMUM_RECORDED_CHECKS);
         self.checks.drain(..excess);
     }
 }
@@ -177,7 +177,7 @@ impl DriverStatus {
         let message = message.into();
         error!("input driver: {message}");
         self.errors.push(message);
-        let excess = self.errors.len().saturating_sub(MAX_RECORDED_ERRORS);
+        let excess = self.errors.len().saturating_sub(MAXIMUM_RECORDED_ERRORS);
         self.errors.drain(..excess);
     }
 
@@ -261,6 +261,17 @@ impl DriverStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_fixed_step_serializes_under_the_full_word_key() {
+        let status = DriverStatus {
+            fixed_step_milliseconds: Some(16.5),
+            ..DriverStatus::default()
+        };
+        let json = serde_json::to_value(&status).expect("status should serialize");
+        assert_eq!(json["fixed_step_milliseconds"], 16.5);
+        assert!(json.get("fixed_step_ms").is_none());
+    }
 
     #[test]
     fn each_screenshot_result_clears_only_one_pending_entry() {

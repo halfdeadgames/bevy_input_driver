@@ -172,7 +172,8 @@ mod tests {
 
     #[test]
     fn skips_comments_and_blank_lines() {
-        let text = "// header\n\n# note\n{\"cmd\":\"quit\"}\n   \n{\"cmd\":\"release_all\"}\n";
+        let text =
+            "// header\n\n# note\n{\"command\":\"quit\"}\n   \n{\"command\":\"release_all\"}\n";
         let commands = parse_script_text(Path::new("t.jsonl"), text).expect("script should parse");
         assert_eq!(
             commands,
@@ -182,7 +183,7 @@ mod tests {
 
     #[test]
     fn errors_name_file_and_line() {
-        let text = "// c\n{\"cmd\":\"quit\"}\n{\"cmd\":\"bogus\"}\n";
+        let text = "// c\n{\"command\":\"quit\"}\n{\"command\":\"bogus\"}\n";
         let message = parse_script_text(Path::new("t.jsonl"), text)
             .expect_err("bad line should fail")
             .to_string();

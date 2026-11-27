@@ -27,40 +27,40 @@ Try it with the demo scene: `cargo run --example driver_demo`.
 
 ## Commands
 
-One JSON object per command, tagged by `cmd`. Positions are logical pixels in the primary window, origin top left. Keys use Bevy `KeyCode` names, buttons use `MouseButton` names (`Left` by default).
+One JSON object per command, tagged by `command`. Positions are logical pixels in the primary window, origin top left. Keys use Bevy `KeyCode` names, buttons use `MouseButton` names (`Left` by default).
 
 | Command | Example |
 | --- | --- |
-| `key_down` | `{"cmd":"key_down","key":"KeyA","text":"a"}` |
-| `key_up` | `{"cmd":"key_up","key":"KeyA"}` |
-| `key_tap` | `{"cmd":"key_tap","key":"Space","hold_frames":2}` (default 1) |
-| `type_text` | `{"cmd":"type_text","text":"hello"}` |
-| `mouse_move` | `{"cmd":"mouse_move","x":100,"y":80}` |
-| `mouse_down` / `mouse_up` | `{"cmd":"mouse_down","button":"Right"}` |
-| `click` | `{"cmd":"click","x":140,"y":80}` (moves first when `x` and `y` are given) |
-| `drag` | `{"cmd":"drag","from":[450,300],"to":[200,300],"frames":10}` |
-| `scroll` | `{"cmd":"scroll","y":-3,"unit":"line"}` (`line` or `pixel`) |
-| `touch` | `{"cmd":"touch","phase":"started","x":50,"y":60,"id":0}` (`started`, `moved`, `ended`, `canceled`) |
-| `touch_drag` | `{"cmd":"touch_drag","from":[0,0],"to":[100,100],"id":0,"frames":10}` |
-| `pinch` / `rotate` | `{"cmd":"pinch","delta":0.5}` |
-| `pan` | `{"cmd":"pan","x":10,"y":0}` |
-| `double_tap` | `{"cmd":"double_tap"}` |
-| `wait_frames` | `{"cmd":"wait_frames","frames":30}` |
-| `wait_seconds` | `{"cmd":"wait_seconds","seconds":0.5}` (wall-clock time from `std::time::Instant`, so pausing or `time_fixed_step` does not change it) |
-| `wait_until_drawn` | `{"cmd":"wait_until_drawn","timeout_seconds":60,"settle_frames":3}` (waits until the shaders in use have compiled; see below; timeout default 60, above 0 and at most 3600; `settle_frames` default 3, from 1 to 600) |
-| `screenshot` | `{"cmd":"screenshot","path":"shots/start.png"}` |
-| `window_minimize` / `window_restore` | `{"cmd":"window_minimize"}` (see [Minimized windows](#minimized-windows)) |
-| `real_input` | `{"cmd":"real_input","blocked":false}` (`blocked` is required; see [Blocking real input](#blocking-real-input)) |
-| `release_all` | `{"cmd":"release_all"}` |
-| `quit` | `{"cmd":"quit"}` (exit code 1 if any `expect` check failed, otherwise 0) |
-| `expect` | `{"cmd":"expect","check":"score","args":{"player":1},"equals":5}` (runs your registered check; `args` and `equals` are optional; see [Checks](#checks)) |
-| `set_seed` | `{"cmd":"set_seed","seed":42}` (sets `DriverSeed`) |
-| `time_pause` / `time_resume` | `{"cmd":"time_pause"}` (pauses or resumes `Time<Virtual>`) |
-| `time_speed` | `{"cmd":"time_speed","factor":0.5}` (factor must be finite and above 0) |
-| `time_fixed_step` | `{"cmd":"time_fixed_step","ms":16.667}` (every frame advances exactly `ms` milliseconds, above 0) |
-| `time_real` | `{"cmd":"time_real"}` (automatic real-time updates and speed 1.0; does not unpause) |
-| `step_frames` | `{"cmd":"step_frames","frames":5}` (resume, run exactly 5 frames, pause; at least 1) |
-| `save_state` / `load_state` | `{"cmd":"save_state","path":"saves/slot1.txt"}` (runs your registered hook) |
+| `key_down` | `{"command":"key_down","key":"KeyA","text":"a"}` |
+| `key_up` | `{"command":"key_up","key":"KeyA"}` |
+| `key_tap` | `{"command":"key_tap","key":"Space","hold_frames":2}` (default 1) |
+| `type_text` | `{"command":"type_text","text":"hello"}` |
+| `mouse_move` | `{"command":"mouse_move","x":100,"y":80}` |
+| `mouse_down` / `mouse_up` | `{"command":"mouse_down","button":"Right"}` |
+| `click` | `{"command":"click","x":140,"y":80}` (moves first when `x` and `y` are given) |
+| `drag` | `{"command":"drag","from":[450,300],"to":[200,300],"frames":10}` |
+| `scroll` | `{"command":"scroll","y":-3,"unit":"line"}` (`line` or `pixel`) |
+| `touch` | `{"command":"touch","phase":"started","x":50,"y":60,"id":0}` (`started`, `moved`, `ended`, `canceled`) |
+| `touch_drag` | `{"command":"touch_drag","from":[0,0],"to":[100,100],"id":0,"frames":10}` |
+| `pinch` / `rotate` | `{"command":"pinch","delta":0.5}` |
+| `pan` | `{"command":"pan","x":10,"y":0}` |
+| `double_tap` | `{"command":"double_tap"}` |
+| `wait_frames` | `{"command":"wait_frames","frames":30}` |
+| `wait_seconds` | `{"command":"wait_seconds","seconds":0.5}` (wall-clock time from `std::time::Instant`, so pausing or `time_fixed_step` does not change it) |
+| `wait_until_drawn` | `{"command":"wait_until_drawn","timeout_seconds":60,"settle_frames":3}` (waits until the shaders in use have compiled; see below; timeout default 60, above 0 and at most 3600; `settle_frames` default 3, from 1 to 600) |
+| `screenshot` | `{"command":"screenshot","path":"shots/start.png"}` |
+| `window_minimize` / `window_restore` | `{"command":"window_minimize"}` (see [Minimized windows](#minimized-windows)) |
+| `real_input` | `{"command":"real_input","blocked":false}` (`blocked` is required; see [Blocking real input](#blocking-real-input)) |
+| `release_all` | `{"command":"release_all"}` |
+| `quit` | `{"command":"quit"}` (exit code 1 if any `expect` check failed, otherwise 0) |
+| `expect` | `{"command":"expect","check":"score","arguments":{"player":1},"equals":5}` (runs your registered check; `arguments` and `equals` are optional; see [Checks](#checks)) |
+| `set_seed` | `{"command":"set_seed","seed":42}` (sets `DriverSeed`) |
+| `time_pause` / `time_resume` | `{"command":"time_pause"}` (pauses or resumes `Time<Virtual>`) |
+| `time_speed` | `{"command":"time_speed","factor":0.5}` (factor must be finite and above 0) |
+| `time_fixed_step` | `{"command":"time_fixed_step","milliseconds":16.667}` (every frame advances exactly that many milliseconds; the value must be above 0) |
+| `time_real` | `{"command":"time_real"}` (automatic real-time updates and speed 1.0; does not unpause) |
+| `step_frames` | `{"command":"step_frames","frames":5}` (resume, run exactly 5 frames, pause; at least 1) |
+| `save_state` / `load_state` | `{"command":"save_state","path":"saves/slot1.txt"}` (runs your registered hook) |
 
 Frame counts (`hold_frames`, `frames`, and `wait_frames`) are capped at 100000 per command; larger values are rejected. `click`, `drag`, `touch`, `touch_drag`, and `scroll` end with an extra frame so `bevy_picking`, which reads window events a frame late, has finished before the next command (such as a screenshot) runs. `drive/clear` also cancels touches the driver started, and pauses time again if a `step_frames` was running.
 
@@ -68,13 +68,13 @@ Every command is visible to game systems for at least one frame of its own. `key
 
 ## Live use over BRP
 
-BRP methods: `drive/send` (one command object or an array; all are parsed before any is queued), `drive/status`, and `drive/clear` (empties the queue and releases everything the driver holds). `drive/status` reports `frame_count`, `queue_length`, `idle`, `cursor_position`, `held_keys`, `held_buttons`, `held_touches`, `pending_screenshots`, `screenshots_saved`, `errors` (last 50), and `script_loaded`, `seed`, `paused`, `speed`, `fixed_step_ms` (null under real time), `virtual_elapsed_seconds`, `state_operations` (last 50 entries such as `saved saves/slot1.txt`), `checks` (last 50 check results), `checks_failed` (every failed check since launch), `render_ready`, `pipelines_pending`, `failed_pipelines` (each entry has `label`, `shader_paths`, and `error`), `render_frame_count` (runs of Bevy's `Render` schedule, or null without a renderer), `window_size` (the primary window's `[width, height]` in physical pixels, or null without a primary window), `window_minimized`, `window_os_minimized` (see [Minimized windows](#minimized-windows)), and `real_input_blocked` (see [Blocking real input](#blocking-real-input)). The time, render, and window fields are refreshed once per frame, and `speed` reads 0 until the first frame finishes. `render_frame_count` usually runs 1 or 2 behind `frame_count`, because a frame is drawn while the next one runs. It counts render runs, not frames shown on screen, so it keeps rising in a minimized window.
+BRP methods: `drive/send` (one command object or an array; all are parsed before any is queued), `drive/status`, and `drive/clear` (empties the queue and releases everything the driver holds). `drive/status` reports `frame_count`, `queue_length`, `idle`, `cursor_position`, `held_keys`, `held_buttons`, `held_touches`, `pending_screenshots`, `screenshots_saved`, `errors` (last 50), and `script_loaded`, `seed`, `paused`, `speed`, `fixed_step_milliseconds` (null under real time), `virtual_elapsed_seconds`, `state_operations` (last 50 entries such as `saved saves/slot1.txt`), `checks` (last 50 check results), `checks_failed` (every failed check since launch), `render_ready`, `pipelines_pending`, `failed_pipelines` (each entry has `label`, `shader_paths`, and `error`), `render_frame_count` (runs of Bevy's `Render` schedule, or null without a renderer), `window_size` (the primary window's `[width, height]` in physical pixels, or null without a primary window), `window_minimized`, `window_os_minimized` (see [Minimized windows](#minimized-windows)), and `real_input_blocked` (see [Blocking real input](#blocking-real-input)). The time, render, and window fields are refreshed once per frame, and `speed` reads 0 until the first frame finishes. `render_frame_count` usually runs 1 or 2 behind `frame_count`, because a frame is drawn while the next one runs. It counts render runs, not frames shown on screen, so it keeps rising in a minimized window.
 
 The helper `tools/drive.py` needs only Python 3:
 
 ```text
-python tools/drive.py send '{"cmd":"click","x":140,"y":80}' --wait
-python tools/drive.py send '[{"cmd":"key_tap","key":"KeyA"},{"cmd":"screenshot","path":"shots/a.png"}]' --wait
+python tools/drive.py send '{"command":"click","x":140,"y":80}' --wait
+python tools/drive.py send '[{"command":"key_tap","key":"KeyA"},{"command":"screenshot","path":"shots/a.png"}]' --wait
 python tools/drive.py send-file tests/smoke.jsonl --wait --timeout 60
 python tools/drive.py status
 python tools/drive.py wait --timeout 30
@@ -99,7 +99,7 @@ A script with `expect` lines and a final `quit` is a self-checking test: the pro
 
 A real mouse resting over a newly shown window sends cursor positions that mix with injected ones, so the driver blocks real input while it is in control.
 
-- Blocking starts when a launch script loads, or when the first live command arrives through `drive/send`. It lasts until the game exits or `{"cmd":"real_input","blocked":false}` turns it off. `{"cmd":"real_input","blocked":true}` turns it back on. After you send `real_input`, later live commands do not change the setting. `drive/status` reports the state as `real_input_blocked`, and one info line is logged each time it changes.
+- Blocking starts when a launch script loads, or when the first live command arrives through `drive/send`. It lasts until the game exits or `{"command":"real_input","blocked":false}` turns it off. `{"command":"real_input","blocked":true}` turns it back on. After you send `real_input`, later live commands do not change the setting. `drive/status` reports the state as `real_input_blocked`, and one info line is logged each time it changes.
 - Mouse: while blocked, the primary window's `CursorOptions::hit_test` is false, so on Windows the real pointer passes through the window to whatever is below. It is written only when the state changes. The driver never writes `Window::cursor_position`.
 - Keyboard and pointer messages: while blocked, the driver empties the typed `KeyboardInput`, `MouseButtonInput`, `MouseWheel`, `CursorMoved`, `MouseMotion`, `TouchInput`, and gesture message queues at the start of every frame (in `First`, after Bevy swaps the message buffers). Real input is written before that point and injected input in `PreUpdate`, so only real input is dropped. This holds even when the window has focus. Real `KeyboardFocusLost` is kept.
 - Known limits: `Messages<WindowEvent>` is not cleared, because `bevy_picking` reads the injected pointer window events a frame late. A real key press can therefore still show up inside `WindowEvent::KeyboardInput` for a system that reads raw `WindowEvent`s. A game system that reads these typed messages in `FixedUpdate` can miss an injected message in a frame where no fixed step ran, because the next frame's clearing removes it before the step. Read state from `ButtonInput` or read in `Update` instead.
@@ -115,14 +115,14 @@ An unfocused window runs under Bevy's default `WinitSettings::game()` unfocused 
 Bevy compiles shaders on background threads and skips drawing anything whose render pipeline is not ready, so the first frames of a run can be blank. Start a script with `wait_until_drawn` instead of a fixed `wait_frames`:
 
 ```text
-{"cmd":"wait_until_drawn"}
-{"cmd":"screenshot","path":"shots/start.png"}
+{"command":"wait_until_drawn"}
+{"command":"screenshot","path":"shots/start.png"}
 ```
 
 The driver watches Bevy's `PipelineCache` in the render world. The game counts as drawn once 3 render frames in a row (or `settle_frames`, if the command gives it) had at least one pipeline, none queued or compiling, and no new ones. Only render frames after the command starts count (at least one more than that number, because the render world runs a frame behind), so a scene loaded or spawned just before the command is waited for too. The command then waits one more frame so that frame has been presented. `drive/status` shows the same check, always with 3 frames, as `render_ready`, with `pipelines_pending` counting the pipelines still compiling.
 
 - On a timeout, an error such as `wait_until_drawn: timed out: 2 of 14 pipelines still compiling` is recorded and the script continues. Other reasons are that no pipelines exist (nothing is being drawn) or that the pipeline count kept changing.
-- A game that keeps making new pipelines (materials or variants that change over time) may never have 3 quiet frames in a row, so the wait runs until the timeout. Pass a lower `settle_frames`, such as `{"cmd":"wait_until_drawn","settle_frames":1}`, to end on the first quiet frame. Fewer frames give slow assets less time to queue their pipelines, so keep the default when the game allows it.
+- A game that keeps making new pipelines (materials or variants that change over time) may never have 3 quiet frames in a row, so the wait runs until the timeout. Pass a lower `settle_frames`, such as `{"command":"wait_until_drawn","settle_frames":1}`, to end on the first quiet frame. Fewer frames give slow assets less time to queue their pipelines, so keep the default when the game allows it.
 - A minimized window does not stop the wait: on Windows it succeeds at once, though nothing is on screen. See [Minimized windows](#minimized-windows).
 - A shader that fails to compile counts as finished, so the wait does not hang. The error says how many pipelines failed, and `failed_pipelines` in `drive/status` lists each failed pipeline's label, shader paths, and error text.
 - With no renderer (no `RenderPlugin`), the command records an error and the script continues.
@@ -175,7 +175,7 @@ fn save_game_state(In(path): In<PathBuf>, player: Single<&Transform, With<Player
 
 ## Checks
 
-A check reads a value from the game. Register it by name as a one-shot system that takes the command's `args` as `In<serde_json::Value>` (null when `args` is left out) and returns the value it read, or an error message:
+A check reads a value from the game. Register it by name as a one-shot system that takes the command's `arguments` as `In<serde_json::Value>` (null when `arguments` is left out) and returns the value it read, or an error message:
 
 ```rust
 use bevy_input_driver::InputDriverAppExt;

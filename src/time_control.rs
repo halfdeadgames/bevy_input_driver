@@ -13,7 +13,7 @@ use bevy::{
 use crate::status::{DriverStatus, record_error_in_world};
 
 // Bevy's own default, which `Time<Virtual>` does not expose publicly.
-const DEFAULT_VIRTUAL_MAX_DELTA: Duration = Duration::from_millis(250);
+const DEFAULT_VIRTUAL_MAXIMUM_DELTA: Duration = Duration::from_millis(250);
 
 /// One change to the game clock, applied by a world command.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -105,7 +105,7 @@ pub fn apply_time_action(
             *update_strategy(world)? = TimeUpdateStrategy::Automatic;
             let mut virtual_time = virtual_time(world)?;
             virtual_time.set_relative_speed(1.0);
-            virtual_time.set_max_delta(DEFAULT_VIRTUAL_MAX_DELTA);
+            virtual_time.set_max_delta(DEFAULT_VIRTUAL_MAXIMUM_DELTA);
         }
     }
     Ok(())
@@ -136,7 +136,7 @@ fn report_time_state(
 ) {
     status.paused = virtual_time.is_paused();
     status.speed = virtual_time.relative_speed();
-    status.fixed_step_ms = match *update_strategy {
+    status.fixed_step_milliseconds = match *update_strategy {
         TimeUpdateStrategy::ManualDuration(step) => Some(step.as_secs_f64() * 1000.0),
         _ => None,
     };
@@ -198,7 +198,7 @@ mod tests {
         assert_eq!(max_delta, Duration::from_millis(500));
         apply_time_action(&mut world, TimeControlAction::RealTime).expect("real time");
         let max_delta = world.resource::<Time<Virtual>>().max_delta();
-        assert_eq!(max_delta, DEFAULT_VIRTUAL_MAX_DELTA);
+        assert_eq!(max_delta, DEFAULT_VIRTUAL_MAXIMUM_DELTA);
     }
 
     #[test]

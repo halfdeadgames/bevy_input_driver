@@ -250,18 +250,21 @@ fn show_status(
     );
 }
 
-fn button_is_green(In(_args): In<Value>, button: Single<&ToggleButton>) -> Result<Value, String> {
+fn button_is_green(
+    In(_arguments): In<Value>,
+    button: Single<&ToggleButton>,
+) -> Result<Value, String> {
     Ok(Value::Bool(button.is_green))
 }
 
 fn square_top_left(
-    In(_args): In<Value>,
+    In(_arguments): In<Value>,
     square: Single<&DraggableSquare>,
 ) -> Result<Value, String> {
     Ok(json!([square.top_left.x, square.top_left.y]))
 }
 
-fn typed_text_method(In(_params): In<Option<Value>>, typed: Res<TypedText>) -> BrpResult {
+fn typed_text_method(In(_parameters): In<Option<Value>>, typed: Res<TypedText>) -> BrpResult {
     Ok(Value::String(typed.0.clone()))
 }
 
